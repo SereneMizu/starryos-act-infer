@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Rust
+act-infer-ort/target/
+
+# Dataset and model
+output/
+
+# tgoskits build artifacts
+tgoskits/tmp/
+
+# Starry app build artifacts
+starry-apps/act-infer/act-infer-ort
+starry-apps/act-infer/model.onnx
+starry-apps/act-infer/frame_*.jpg
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
