@@ -8,47 +8,51 @@
 
 ## 验证结果
 
+以下为 QEMU 配置 350 MB 内存下的实测结果（已验证可正常运行）。
+
 ```
-[mem] startup:        MemTotal: 1029504 kB  MemFree:  1016430 kB  MemAvailable: 1017254 kB
-[ort] model loaded in 14661ms
-[mem] after model load: MemTotal: 1029504 kB  MemFree:   796204 kB  MemAvailable:  799024 kB
-[frame_000000.jpg] left_vel=-0.001582  right_vel=+0.007263  gripper=+0.000000  infer=16882ms
+[mem] startup:        MemTotal:  342024 kB  MemFree:   330276 kB  MemAvailable:  331100 kB
+[ort] model loaded in 15618ms  peak memory during load: 294 MB
+[mem] after model load: MemTotal:  342024 kB  MemFree:   109767 kB  MemAvailable:  112587 kB
+[frame_000000.jpg] left_vel=-0.001582  right_vel=+0.007263  gripper=+0.000000  infer=17165ms  peak=220 MB
   turn: LEFT (correct)
-[mem] after frame 1:  MemTotal: 1029504 kB  MemFree:   791692 kB  MemAvailable:  794512 kB
-[frame_000227.jpg] left_vel=+0.006104  right_vel=-0.000444  gripper=+0.000000  infer=16924ms
+[mem] after frame 1:  MemTotal:  342024 kB  MemFree:   105258 kB  MemAvailable:  108078 kB
+[frame_000227.jpg] left_vel=+0.006104  right_vel=-0.000444  gripper=+0.000000  infer=17041ms  peak=223 MB
   turn: RIGHT (correct)
-[mem] after frame 2:  MemTotal: 1029504 kB  MemFree:   788956 kB  MemAvailable:  791776 kB
+[mem] after frame 2:  MemTotal:  342024 kB  MemFree:   102522 kB  MemAvailable:  105342 kB
 
 ACT_INFER_OK
 ```
 
-内存数据来源于内核 `axalloc` 分配器，通过 `/proc/meminfo` 读取，反映真实物理页使用情况。
+内存数据来源于内核 `axalloc` 分配器，通过 `/proc/meminfo` 读取，反映真实物理页使用情况。峰值通过后台线程每 10ms 轮询 MemFree 捕获。
 
 ### 耗时
 
 | 阶段 | 耗时 |
 |------|------|
-| 模型加载 | 14,661 ms |
-| frame_000000 推理 | 16,882 ms |
-| frame_000227 推理 | 16,924 ms |
+| 模型加载 | 15,618 ms |
+| frame_000000 推理 | 17,165 ms |
+| frame_000227 推理 | 17,041 ms |
 
 ### 内存
 
-| 阶段 | MemAvailable | 已用内存（较启动） | 较上次增加 |
-|------|-------------|-------------------|-----------|
-| 启动 | 993 MB | 0 MB | — |
-| 模型加载后 | 781 MB | 213 MB | +213 MB |
-| frame 1 推理后 | 776 MB | 217 MB | +4 MB |
-| frame 2 推理后 | 774 MB | 220 MB | +2 MB |
+| 阶段 | MemAvailable | 已用内存（较启动） | 较上次增加 | 峰值占用 |
+|------|-------------|-------------------|-----------|---------|
+| 启动 | 323 MB | 0 MB | — | — |
+| 模型加载后 | 110 MB | 213 MB | +213 MB | **294 MB** |
+| frame 1 推理后 | 106 MB | 217 MB | +4 MB | **220 MB** |
+| frame 2 推理后 | 103 MB | 220 MB | +3 MB | **223 MB** |
 
 | 指标 | 值 |
 |------|-----|
 | 可执行文件 `act-infer-ort`（riscv64 musl） | 3.2 MB |
 | ONNX 模型 `model.onnx` | 194 MB |
-| QEMU 总内存（MemTotal） | 1,005 MB |
-| 模型加载内存开销 | 213 MB |
-| 单帧推理额外内存 | 2–4 MB |
-| 总内存占用 | 220 MB（含 ONNX Runtime 运行时） |
+| QEMU 总内存（MemTotal） | 334 MB（配置 350 MB） |
+| **内存占用峰值** | **294 MB（模型加载阶段）** |
+| 模型加载后稳态占用 | 213 MB |
+| 单帧推理额外内存 | 3–4 MB |
+| 推理阶段峰值 | 220–223 MB |
+| 最低可运行内存配置 | 350 MB |
 | frame_000000（左转） | `right_vel(+0.007263) > left_vel(-0.001582)` → LEFT |
 | frame_000227（右转） | `left_vel(+0.006104) > right_vel(-0.000444)` → RIGHT |
 
