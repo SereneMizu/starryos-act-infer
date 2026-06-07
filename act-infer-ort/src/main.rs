@@ -6,6 +6,23 @@ use ndarray::IxDyn;
 use ort::session::Session;
 use ort::value::Tensor;
 
+fn print_mem(tag: &str) {
+    let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mut mem_total = "";
+    let mut mem_free = "";
+    let mut mem_avail = "";
+    for line in s.lines() {
+        if line.starts_with("MemTotal:") {
+            mem_total = line;
+        } else if line.starts_with("MemFree:") {
+            mem_free = line;
+        } else if line.starts_with("MemAvailable:") {
+            mem_avail = line;
+        }
+    }
+    println!("[mem] {tag}: {mem_total}  {mem_free}  {mem_avail}");
+}
+
 const STATE_NORM: [f32; 2] = [-0.433693, -1.0];
 const ACTION_Q01: [f32; 3] = [-0.1, 0.0, 0.0];
 const ACTION_D: [f32; 3] = [0.3, 0.2, 0.0];
@@ -82,28 +99,37 @@ fn run_inference(session: &mut Session, image_path: &PathBuf) -> Result<[f32; 3]
 fn main() -> ort::Result<()> {
     let args = Args::parse();
 
+    print_mem("startup");
+
     let t = Instant::now();
     let mut session = load_model(&args.model)?;
     let load_ms = t.elapsed().as_millis();
     println!("[ort] model loaded in {load_ms}ms");
+    print_mem("after model load");
 
-    let action_a = run_inference(&mut session, &args.left)?;
     let name_a = args.left.file_name().unwrap_or_default().to_string_lossy();
+    let t = Instant::now();
+    let action_a = run_inference(&mut session, &args.left)?;
+    let infer_ms_a = t.elapsed().as_millis();
     println!(
-        "[{name_a}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}",
+        "[{name_a}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}  infer={infer_ms_a}ms",
         action_a[0], action_a[1], action_a[2]
     );
     let left_ok = action_a[1] > action_a[0];
     println!("  turn: {}", if left_ok { "LEFT (correct)" } else { "WRONG" });
+    print_mem("after frame 1");
 
-    let action_b = run_inference(&mut session, &args.right)?;
     let name_b = args.right.file_name().unwrap_or_default().to_string_lossy();
+    let t = Instant::now();
+    let action_b = run_inference(&mut session, &args.right)?;
+    let infer_ms_b = t.elapsed().as_millis();
     println!(
-        "[{name_b}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}",
+        "[{name_b}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}  infer={infer_ms_b}ms",
         action_b[0], action_b[1], action_b[2]
     );
     let right_ok = action_b[0] > action_b[1];
     println!("  turn: {}", if right_ok { "RIGHT (correct)" } else { "WRONG" });
+    print_mem("after frame 2");
 
     if left_ok && right_ok {
         println!("\nACT_INFER_OK");

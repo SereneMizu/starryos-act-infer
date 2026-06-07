@@ -9,26 +9,50 @@
 ## 验证结果
 
 ```
-[ort] model loaded in 16296ms
-[frame_000000.jpg] left_vel=-0.001582  right_vel=+0.007263  gripper=+0.000000
+[mem] startup:        MemTotal: 1029504 kB  MemFree:  1016430 kB  MemAvailable: 1017254 kB
+[ort] model loaded in 14661ms
+[mem] after model load: MemTotal: 1029504 kB  MemFree:   796204 kB  MemAvailable:  799024 kB
+[frame_000000.jpg] left_vel=-0.001582  right_vel=+0.007263  gripper=+0.000000  infer=16882ms
   turn: LEFT (correct)
-[frame_000227.jpg] left_vel=+0.006104  right_vel=-0.000444  gripper=+0.000000
+[mem] after frame 1:  MemTotal: 1029504 kB  MemFree:   791692 kB  MemAvailable:  794512 kB
+[frame_000227.jpg] left_vel=+0.006104  right_vel=-0.000444  gripper=+0.000000  infer=16924ms
   turn: RIGHT (correct)
+[mem] after frame 2:  MemTotal: 1029504 kB  MemFree:   788956 kB  MemAvailable:  791776 kB
 
 ACT_INFER_OK
 ```
+
+内存数据来源于内核 `axalloc` 分配器，通过 `/proc/meminfo` 读取，反映真实物理页使用情况。
+
+### 耗时
+
+| 阶段 | 耗时 |
+|------|------|
+| 模型加载 | 14,661 ms |
+| frame_000000 推理 | 16,882 ms |
+| frame_000227 推理 | 16,924 ms |
+
+### 内存
+
+| 阶段 | MemAvailable | 已用内存（较启动） | 较上次增加 |
+|------|-------------|-------------------|-----------|
+| 启动 | 993 MB | 0 MB | — |
+| 模型加载后 | 781 MB | 213 MB | +213 MB |
+| frame 1 推理后 | 776 MB | 217 MB | +4 MB |
+| frame 2 推理后 | 774 MB | 220 MB | +2 MB |
 
 | 指标 | 值 |
 |------|-----|
 | 可执行文件 `act-infer-ort`（riscv64 musl） | 3.2 MB |
 | ONNX 模型 `model.onnx` | 194 MB |
-| QEMU 内存配置 | 1 GB |
-| 模型加载耗时（QEMU riscv64） | 16,296 ms |
-| 完整推理流水线耗时 | 120 秒超时内完成 |
+| QEMU 总内存（MemTotal） | 1,005 MB |
+| 模型加载内存开销 | 213 MB |
+| 单帧推理额外内存 | 2–4 MB |
+| 总内存占用 | 220 MB（含 ONNX Runtime 运行时） |
 | frame_000000（左转） | `right_vel(+0.007263) > left_vel(-0.001582)` → LEFT |
 | frame_000227（右转） | `left_vel(+0.006104) > right_vel(-0.000444)` → RIGHT |
 
-方向判断逻辑：左轮速度 < 右轮速度 → 车体左转，反之右转。源码见 `act-infer-ort/src/main.rs:96-106`。
+方向判断逻辑：左轮速度 < 右轮速度 → 车体左转，反之右转。源码见 `act-infer-ort/src/main.rs`。
 
 ## 快速复现
 
