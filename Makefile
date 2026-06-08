@@ -1,5 +1,6 @@
 .PHONY: onnx test all clean \
        venv export infer-all infer-all-torch infer-all-onnx verify \
+       quantize quantize-verify quantize-int8 quantize-int8-verify \
        docker docker-up docker-shell docker-down \
        build-host cross-build prepare-rootfs prepare-app-files starry-link starry-test \
        sg2002-sdcard sg2002-clean
@@ -10,8 +11,10 @@ CARGO    ?= cargo
 DOCKER_IMAGE ?= ghcr.io/rcore-os/tgoskits-container:latest
 DOCKER_NAME  := starryos-act-infer
 
-MODEL_PT   := output/train/model.pt
-MODEL_ONNX := output/train/model.onnx
+MODEL_PT    := output/train/model.pt
+MODEL_ONNX  := output/train/model.onnx
+MODEL_FP16  := output/train/model_fp16.onnx
+MODEL_INT8  := output/train/model_int8.onnx
 
 RISCV_TOOLCHAIN_ROOT ?= /opt/riscv64-linux-musl-cross
 
@@ -25,6 +28,8 @@ ROOTFS_APP    := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
 
 RESULT_TORCH := output/infer_results_torch.json
 RESULT_ONNX  := output/infer_results_onnx.json
+RESULT_FP16  := output/infer_results_fp16.json
+RESULT_INT8  := output/infer_results_int8.json
 
 all: onnx test
 
@@ -54,6 +59,33 @@ $(RESULT_TORCH): scripts/batch_infer_torch.py $(MODEL_PT)
 
 $(RESULT_ONNX): scripts/batch_infer_onnx.py $(MODEL_ONNX)
 	$(PYTHON) scripts/batch_infer_onnx.py
+
+# --- FP16 quantization pipeline ---
+
+quantize: quantize-verify
+
+$(MODEL_FP16): scripts/quantize_onnx.py $(MODEL_ONNX)
+	$(PYTHON) scripts/quantize_onnx.py
+
+$(RESULT_FP16): scripts/batch_infer_onnx.py $(MODEL_FP16)
+	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_FP16) --output $(RESULT_FP16)
+
+quantize-verify: $(RESULT_ONNX) $(RESULT_FP16)
+	$(PYTHON) scripts/verify_onnx.py --a $(RESULT_ONNX) --b $(RESULT_FP16)
+
+# --- INT8 quantization pipeline ---
+
+quantize-int8: quantize-int8-verify
+
+$(MODEL_INT8): scripts/quantize_onnx.py $(MODEL_ONNX)
+	$(PYTHON) scripts/quantize_onnx.py --int8
+
+$(RESULT_INT8): scripts/batch_infer_onnx.py $(MODEL_INT8)
+	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_INT8) --output $(RESULT_INT8)
+
+quantize-int8-verify: $(RESULT_ONNX) $(RESULT_INT8)
+	$(PYTHON) scripts/verify_onnx.py --a $(RESULT_ONNX) --b $(RESULT_INT8)
+
 # --- Docker ---
 
 
@@ -131,8 +163,9 @@ sg2002-clean:
 # --- Clean ---
 
 clean:
-	rm -f $(MODEL_ONNX)
+	rm -f $(MODEL_ONNX) $(MODEL_FP16) $(MODEL_INT8)
 	rm -f output/infer_results_torch.json output/infer_results_onnx.json
+	rm -f output/infer_results_fp16.json output/infer_results_int8.json
 	rm -f $(STARRY_APP_LINK)
 	rm -f starry-apps/act-infer/act-infer-ort
 	rm -f starry-apps/act-infer/model.onnx

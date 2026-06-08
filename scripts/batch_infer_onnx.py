@@ -56,10 +56,16 @@ def determine_turn(left_vel, right_vel):
 
 
 def main():
-    onnx_path = PROJECT_ROOT / "output" / "train" / "model.onnx"
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
+    args = parser.parse_args()
+
+    onnx_path = args.model or PROJECT_ROOT / "output" / "train" / "model.onnx"
+    output_path = args.output or PROJECT_ROOT / "output" / "infer_results_onnx.json"
     stats_dir = PROJECT_ROOT / "output" / "dataset"
     img_dir = PROJECT_ROOT / "output" / "dataset" / "videos" / "observation.images.fpv" / "chunk-000"
-    output_path = PROJECT_ROOT / "output" / "infer_results_onnx.json"
 
     stats = load_stats(stats_dir)
 
