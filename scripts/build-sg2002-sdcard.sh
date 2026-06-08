@@ -1,108 +1,112 @@
 #!/usr/bin/env bash
+# 构建 SG2002 (LicheeRV-Nano) SD 卡镜像
+# 包含：boot 分区（官方 u-boot）+ rootfs 分区（Alpine + StarryOS 内核 + TPU 推理应用）
 set -euo pipefail
 
-project_root="$(cd "$(dirname "$0")/.." && pwd)"
-tgoskits_dir="$project_root/tgoskits"
-out_dir="$project_root/output/sg2002"
-mnt_rootfs="$project_root/mnt/sg2002_rootfs"
+proj="$(cd "$(dirname "$0")/.." && pwd)"
+out="$proj/output/sg2002"
+mnt="$proj/mnt/sg2002_rootfs"
 
+BOARD_CONFIG="os/StarryOS/configs/board/licheerv-nano-sg2002.toml"
 OFFICIAL_IMG_URL="https://github.com/sipeed/LicheeRV-Nano-Build/releases/download/20260114/2026-01-14-16-03-d4003f.tar.xz"
 ALPINE_ROOTFS_URL="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/releases/riscv64/alpine-minirootfs-3.23.4-riscv64.tar.gz"
-BOARD_CONFIG="os/StarryOS/configs/board/licheerv-nano-sg2002.toml"
 
-mkdir -p "$out_dir"
+TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
+TPU_CVMODEL="$proj/output/tpu/act_model_cv186x_bf16.cvimodel"
+STATS_JSON="$proj/output/dataset/meta/stats.json"
+FRAMES_DIR="$proj/output/dataset/videos/observation.images.fpv/chunk-000"
+REF_JSON="$proj/output/infer_results_onnx.json"
+CVI_LIB_DIR="$proj/sg2002-libs"
+INFER_SH="$proj/starry-apps/act-infer-tpu/infer.sh"
+APP_DEST="/opt/act-infer"
 
-official_tar="$out_dir/official-img.tar.xz"
-official_img="$out_dir/official.img"
-alpine_tar="$out_dir/alpine-minirootfs-3.23.4-riscv64.tar.gz"
-uimg="$out_dir/starryos.uimg"
-sdcard="$out_dir/sg2002-sdcard.img"
+mkdir -p "$out"
 
-if [[ ! -d "$tgoskits_dir/.git" ]]; then
-    echo "error: tgoskits submodule not initialized. Run: git submodule update --init tgoskits" >&2
-    exit 1
-fi
+official_tar="$out/official-img.tar.xz"
+official_img="$out/official.img"
+alpine_tar="$out/alpine-minirootfs-3.23.4-riscv64.tar.gz"
+sdcard="$out/sg2002-sdcard.img"
+loop_file="$out/.loop_dev"
 
-# --- download official image ---
+# --- 下载官方镜像（含 u-boot）---
+
 if [[ ! -f "$official_img" ]]; then
-    if [[ ! -f "$official_tar" ]]; then
-        echo "[sg2002] downloading official image ..."
-        curl -fSL -o "$official_tar" "$OFFICIAL_IMG_URL"
-    fi
-    echo "[sg2002] extracting official.img ..."
-    tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
-    tar -xf "$official_tar" -C "$tmp_dir"
-    found_img="$(find "$tmp_dir" -name "official.img" | head -1)"
-    if [[ -z "$found_img" ]]; then
-        echo "error: official.img not found in archive" >&2
-        exit 1
-    fi
-    cp "$found_img" "$official_img"
-    rm -rf "$tmp_dir"
-    trap - EXIT
+    [[ -f "$official_tar" ]] || { echo "[sg2002] downloading official image ..."; curl -fSL -o "$official_tar" "$OFFICIAL_IMG_URL"; }
+    echo "[sg2002] extracting ..."
+    tmp=$(mktemp -d)
+    tar -xf "$official_tar" -C "$tmp"
+    cp "$(find "$tmp" -name "*.img" | head -1)" "$official_img"
+    rm -rf "$tmp"
 fi
 
-# --- download alpine rootfs ---
-if [[ ! -f "$alpine_tar" ]]; then
-    echo "[sg2002] downloading alpine rootfs ..."
-    curl -fSL -o "$alpine_tar" "$ALPINE_ROOTFS_URL"
-fi
+# --- 下载 Alpine rootfs ---
 
-# --- build uimg ---
-if [[ ! -f "$uimg" ]]; then
-    echo "[sg2002] building uimg ..."
-    cd "$tgoskits_dir"
-    cargo xtask starry build --config "$BOARD_CONFIG" --arch riscv64
-    found_uimg="$(find "$tgoskits_dir" -name "starryos_riscv64*.uimg" -newer "$tgoskits_dir/Cargo.lock" 2>/dev/null | head -1)"
-    if [[ -z "$found_uimg" ]]; then
-        found_uimg="$(find "$tgoskits_dir/target" -name "*.uimg" -newer "$tgoskits_dir/Cargo.lock" 2>/dev/null | head -1)"
-    fi
-    if [[ -z "$found_uimg" ]]; then
-        echo "error: could not find generated .uimg file" >&2
-        exit 1
-    fi
-    cp "$found_uimg" "$uimg"
-fi
+[[ -f "$alpine_tar" ]] || { echo "[sg2002] downloading alpine rootfs ..."; curl -fSL -o "$alpine_tar" "$ALPINE_ROOTFS_URL"; }
 
-# --- build sdcard image ---
-echo "[sg2002] creating 2GB sdcard image ..."
-sudo rm -f "$sdcard"
-truncate -s 2147483648 "$sdcard"
+# --- 创建 1GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
 
-echo "[sg2002] partitioning ..."
-printf "start=1, size=32768, type=c, bootable\nstart=32769, type=83\n" \
-    | sudo sfdisk "$sdcard" > /dev/null
+rm -f "$sdcard"
+fallocate -l 1073741824 "$sdcard"
+printf "start=1, size=32768, type=c, bootable\nstart=32769, type=83\n" | sfdisk "$sdcard" > /dev/null
 
-loop_dev_file="$out_dir/.loop_dev"
-sudo losetup --find --show --partscan "$sdcard" > "$loop_dev_file"
-LOOP=$(cat "$loop_dev_file")
+LOOP=$(losetup --find --show --partscan "$sdcard")
+echo "$LOOP" > "$loop_file"
 
 cleanup() {
-    sudo umount "$mnt_rootfs" 2>/dev/null || true
-    sudo rmdir "$mnt_rootfs" 2>/dev/null || true
-    sudo losetup -d "$LOOP" 2>/dev/null || true
-    rm -f "$loop_dev_file"
+    umount "$mnt" 2>/dev/null || true
+    rmdir "$mnt" 2>/dev/null || true
+    losetup -D "$LOOP" 2>/dev/null || true
+    rm -f "$loop_file"
 }
 trap cleanup EXIT
 
-echo "[sg2002] writing boot partition ..."
-sudo dd if="$official_img" bs=512 skip=1 count=32768 of="${LOOP}p1" status=none
+partprobe "$LOOP"
+BOOT="${LOOP}p1"
+ROOT="${LOOP}p2"
 
-echo "[sg2002] creating ext4 rootfs ..."
-sudo mkfs.ext4 -F -L rootfs "${LOOP}p2" > /dev/null
+# --- 写入 boot 分区 ---
 
-echo "[sg2002] populating rootfs ..."
-sudo mkdir -p "$mnt_rootfs"
-sudo mount "${LOOP}p2" "$mnt_rootfs"
-sudo tar -xzf "$alpine_tar" -C "$mnt_rootfs"
-sudo cp "$uimg" "$mnt_rootfs/starryos.uimg"
+dd if="$official_img" bs=512 skip=1 count=32768 of="$BOOT" status=none
 
-echo "[sg2002] finalizing ..."
-sudo umount "$mnt_rootfs"
-sudo rmdir "$mnt_rootfs"
-sudo losetup -d "$LOOP"
-rm -f "$loop_dev_file"
+# --- 创建 rootfs 分区 ---
+
+mkfs.ext4 -F -L rootfs "$ROOT" > /dev/null
+mkdir -p "$mnt"
+mount "$ROOT" "$mnt"
+tar -xzf "$alpine_tar" -C "$mnt"
+
+# --- StarryOS 内核（由 Makefile 预构建到 output/sg2002/starryos.uimg）---
+
+echo "[sg2002] installing kernel ..."
+cp "$out/starryos.uimg" "$mnt/starryos.uimg"
+cp "$out/workspace_sg2002.uimg" "$mnt/workspace_sg2002.uimg" 2>/dev/null || true
+
+# --- 安装 TPU 推理应用 ---
+
+echo "[sg2002] installing app ..."
+mkdir -p "$mnt/usr/lib" "$mnt/usr/bin" "$mnt$APP_DEST"
+
+for lib in "$CVI_LIB_DIR"/*.so*; do
+    cp "$lib" "$mnt/usr/lib/"
+    echo "  [lib] $(basename "$lib")"
+done
+
+cp "$TPU_BIN" "$mnt/usr/bin/act-infer-tpu"
+chmod +x "$mnt/usr/bin/act-infer-tpu"
+cp "$TPU_CVMODEL" "$mnt$APP_DEST/model.cvimodel"
+cp "$STATS_JSON" "$mnt$APP_DEST/stats.json"
+cp -r "$FRAMES_DIR" "$mnt$APP_DEST/frames"
+cp "$REF_JSON" "$mnt$APP_DEST/reference.json" 2>/dev/null || true
+cp "$INFER_SH" "$mnt$APP_DEST/infer.sh"
+chmod +x "$mnt$APP_DEST/infer.sh"
+
+# --- 卸载并生成最终镜像 ---
+
+umount "$mnt"
+rmdir "$mnt" 2>/dev/null || true
 trap - EXIT
+losetup -d "$LOOP" 2>/dev/null || true
+rm -f "$loop_file"
 
-echo "[sg2002] done: $sdcard"
+
+echo "[sg2002] done: $sdcard ($(stat -c%s "$sdcard" | numfmt --to=iec))"

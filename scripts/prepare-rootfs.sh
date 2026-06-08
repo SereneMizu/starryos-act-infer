@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
+# 将 Alpine rootfs 镜像中安装 ONNX Runtime（chroot + apk）
 set -euo pipefail
 
+proj="$(cd "$(dirname "$0")/.." && pwd)"
 rootfs_img="${1:?Usage: $0 <rootfs.img>}"
-mountpoint="/tmp/act-infer-rootfs"
+mnt="$proj/mnt/rootfs"
 
-if [[ ! -f "$rootfs_img" ]]; then
-    echo "error: $rootfs_img not found" >&2
-    exit 1
-fi
+[[ -f "$rootfs_img" ]] || { echo "error: $rootfs_img not found" >&2; exit 1; }
 
-mkdir -p "$mountpoint"
-trap 'umount "$mountpoint" 2>/dev/null; rmdir "$mountpoint" 2>/dev/null' EXIT
+mkdir -p "$mnt"
+mount -o loop "$rootfs_img" "$mnt"
 
-mount -o loop "$rootfs_img" "$mountpoint"
+chroot "$mnt" /bin/sh -c 'apk add --no-cache onnxruntime'
+ln -sf libonnxruntime.so.1 "$mnt/usr/lib/libonnxruntime.so"
 
-chroot "$mountpoint" /bin/sh -c 'apk add --no-cache onnxruntime'
-ln -sf libonnxruntime.so.1 "$mountpoint/usr/lib/libonnxruntime.so"
-
-umount "$mountpoint"
-rmdir "$mountpoint" 2>/dev/null || true
-trap - EXIT
+umount "$mnt"
+rmdir "$mnt" 2>/dev/null || true
 
 echo "[prepare-rootfs] done: $rootfs_img"

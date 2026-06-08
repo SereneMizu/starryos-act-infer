@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
+# 在容器内安装 ONNX Runtime x64（动态库 + ldconfig）
 set -euo pipefail
 
-ORT_VERSION="${1:-1.26.0}"
-ORT_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
-INSTALL_DIR="/usr/lib"
+version="${1:-1.26.0}"
+install_dir="/usr/lib"
 
-if ldconfig -p 2>/dev/null | grep -q libonnxruntime.so; then
-    echo "[install-ort] ONNX Runtime already installed, skipping."
-    exit 0
-fi
+ldconfig -p 2>/dev/null | grep -q libonnxruntime.so && { echo "[install-ort] already installed, skipping."; exit 0; }
 
-echo "[install-ort] Installing ONNX Runtime ${ORT_VERSION}..."
+echo "[install-ort] installing ONNX Runtime ${version} ..."
 cd /tmp
-curl -sL "${ORT_URL}" -o onnxruntime.tgz
+curl -sL "https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-linux-x64-${version}.tgz" -o onnxruntime.tgz
 tar xzf onnxruntime.tgz
-cp "onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so"* "${INSTALL_DIR}/"
+cp "onnxruntime-linux-x64-${version}/lib/libonnxruntime.so"* "${install_dir}/"
 ldconfig
-rm -rf "onnxruntime-linux-x64-${ORT_VERSION}" onnxruntime.tgz
-echo "[install-ort] Done."
+rm -rf "onnxruntime-linux-x64-${version}" onnxruntime.tgz
+echo "[install-ort] done."

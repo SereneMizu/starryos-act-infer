@@ -107,7 +107,7 @@ def main():
         input_names=["images", "state"],
         output_names=["action"],
         do_constant_folding=True,
-        dynamo=True,
+        dynamo=False,
         external_data=False,
     )
 

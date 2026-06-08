@@ -3,21 +3,15 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-TORCH_RESULTS = PROJECT_ROOT / "output" / "infer_results_torch.json"
-ONNX_RESULTS = PROJECT_ROOT / "output" / "infer_results_onnx.json"
-
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--a", type=Path, default=TORCH_RESULTS, help="Reference results JSON")
-    parser.add_argument("--b", type=Path, default=ONNX_RESULTS, help="Test results JSON")
+    parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
 
-    with open(args.a) as f:
+    with open(args.reference) as f:
         a_data = json.load(f)
-    with open(args.b) as f:
+    with open(args.result) as f:
         b_data = json.load(f)
 
     assert len(a_data) == len(b_data), f"length mismatch: {len(a_data)} vs {len(b_data)}"
@@ -44,8 +38,8 @@ def main():
                 "b": {"left_vel": o["left_vel"], "right_vel": o["right_vel"], "turn": o["turn"]},
             })
 
-    a_name = args.a.stem.replace("infer_results_", "")
-    b_name = args.b.stem.replace("infer_results_", "")
+    a_name = args.reference.stem.replace("infer_results_", "")
+    b_name = args.result.stem.replace("infer_results_", "")
     print(f"Comparing: {a_name} vs {b_name}")
     print(f"Total: {total} frames")
     print(f"Turn match: {same_turn}/{total} ({same_turn/total*100:.1f}%)")
