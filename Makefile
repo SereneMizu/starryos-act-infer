@@ -2,7 +2,7 @@
         export verify quantize quantize-int8 \
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
-        test-host test-qemu build-sg2002
+        test-host test-qemu build-sg2002 sg2002-sdcard
 
 PYTHON := .venv/bin/python
 
@@ -124,7 +124,10 @@ $(SG2002_UIMG): docker-up
 build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
 	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16 --processor cv181x
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
-	bash scripts/build-sg2002-sdcard.sh
+	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
+
+sg2002-sdcard: build-sg2002
+	sudo bash scripts/build-sg2002-sdcard.sh
 
 # === Rootfs ===
 

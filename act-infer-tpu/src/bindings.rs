@@ -2,6 +2,12 @@
 
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
 
+pub const CVI_SUCCESS: u32 = 0;
+pub const CVI_FAILURE: i32 = -1;
+pub const CVI_RC_SUCCESS: u32 = 0;
+pub const CVI_RC_FAILURE: i32 = -1;
+pub const CVI_DIM_MAX: u32 = 6;
+
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum CVI_FMT {
@@ -14,12 +20,14 @@ pub enum CVI_FMT {
     CVI_FMT_INT8 = 6,
     CVI_FMT_UINT8 = 7,
 }
+
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum CVI_MEM_TYPE_E {
     CVI_MEM_SYSTEM = 1,
     CVI_MEM_DEVICE = 2,
 }
+
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum CVI_NN_PIXEL_FORMAT_E {
@@ -36,6 +44,7 @@ pub enum CVI_NN_PIXEL_FORMAT_E {
     CVI_NN_PIXEL_PLANAR = 101,
     CVI_NN_PIXEL_PACKED = 102,
 }
+
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum CVI_CONFIG_OPTION {
@@ -49,16 +58,18 @@ pub enum CVI_CONFIG_OPTION {
     OPTION_INPUT_MEM_TYPE = 7,
     OPTION_OUTPUT_MEM_TYPE = 8,
 }
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct CVI_SHAPE {
     pub dim: [i32; 6usize],
     pub dim_size: usize,
 }
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct CVI_TENSOR {
-    pub name: *mut ::std::ffi::c_char,
+    pub name: *mut ::std::os::raw::c_char,
     pub shape: CVI_SHAPE,
     pub fmt: CVI_FMT,
     pub count: usize,
@@ -67,15 +78,17 @@ pub struct CVI_TENSOR {
     pub paddr: u64,
     pub mem_type: CVI_MEM_TYPE_E,
     pub qscale: f32,
-    pub zero_point: ::std::ffi::c_int,
+    pub zero_point: ::std::os::raw::c_int,
     pub pixel_format: CVI_NN_PIXEL_FORMAT_E,
     pub aligned: bool,
     pub mean: [f32; 3usize],
     pub scale: [f32; 3usize],
-    pub owner: *mut ::std::ffi::c_void,
-    pub reserved: [::std::ffi::c_char; 32usize],
+    pub owner: *mut ::std::os::raw::c_void,
+    pub reserved: [::std::os::raw::c_char; 32usize],
 }
+
 pub use self::CVI_NN_PIXEL_FORMAT_E as CVI_FRAME_TYPE;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct CVI_VIDEO_FRAME_INFO {
@@ -85,45 +98,22 @@ pub struct CVI_VIDEO_FRAME_INFO {
     pub stride: [u32; 3usize],
     pub pyaddr: [u64; 3usize],
 }
-pub type CVI_MODEL_HANDLE = *mut ::std::ffi::c_void;
-pub type CVI_RC = ::std::ffi::c_int;
+
+pub type CVI_MODEL_HANDLE = *mut ::std::os::raw::c_void;
+pub type CVI_RC = ::std::os::raw::c_int;
+
 unsafe extern "C" {
     pub fn CVI_NN_RegisterModel(
-        model_file: *const ::std::ffi::c_char,
+        model_file: *const ::std::os::raw::c_char,
         model: *mut CVI_MODEL_HANDLE,
     ) -> CVI_RC;
-}
-unsafe extern "C" {
     pub fn CVI_NN_RegisterModelFromBuffer(
         buf: *const i8,
         size: u32,
         model: *mut CVI_MODEL_HANDLE,
     ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_RegisterModelFromFd(
-        fd: ::std::ffi::c_int,
-        ud_offset: usize,
-        model: *mut CVI_MODEL_HANDLE,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
     pub fn CVI_NN_CloneModel(model: CVI_MODEL_HANDLE, cloned: *mut CVI_MODEL_HANDLE) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_GetModelVersion(
-        model: CVI_MODEL_HANDLE,
-        major: *mut i32,
-        minor: *mut i32,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_GetModelTarget(model: CVI_MODEL_HANDLE) -> *const ::std::ffi::c_char;
-}
-unsafe extern "C" {
     pub fn CVI_NN_SetConfig(model: CVI_MODEL_HANDLE, option: CVI_CONFIG_OPTION, ...) -> CVI_RC;
-}
-unsafe extern "C" {
     pub fn CVI_NN_GetInputOutputTensors(
         model: CVI_MODEL_HANDLE,
         inputs: *mut *mut CVI_TENSOR,
@@ -131,8 +121,6 @@ unsafe extern "C" {
         outputs: *mut *mut CVI_TENSOR,
         output_num: *mut i32,
     ) -> CVI_RC;
-}
-unsafe extern "C" {
     pub fn CVI_NN_Forward(
         model: CVI_MODEL_HANDLE,
         inputs: *mut CVI_TENSOR,
@@ -140,100 +128,15 @@ unsafe extern "C" {
         outputs: *mut CVI_TENSOR,
         output_num: i32,
     ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_ForwardAsync(
-        model: CVI_MODEL_HANDLE,
-        inputs: *mut CVI_TENSOR,
-        input_num: i32,
-        outputs: *mut CVI_TENSOR,
-        output_num: i32,
-        task_no: *mut *mut ::std::ffi::c_void,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_ForwardWait(model: CVI_MODEL_HANDLE, task_no: *mut ::std::ffi::c_void) -> CVI_RC;
-}
-unsafe extern "C" {
     pub fn CVI_NN_CleanupModel(model: CVI_MODEL_HANDLE) -> CVI_RC;
-}
-unsafe extern "C" {
-    #[doc = "\n Helper functions\n"]
-    pub fn CVI_NN_GetInputTensors(
-        model: CVI_MODEL_HANDLE,
-        inputs: *mut *mut CVI_TENSOR,
-        input_num: *mut i32,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_GetOutputTensors(
-        model: CVI_MODEL_HANDLE,
-        outputs: *mut *mut CVI_TENSOR,
-        output_num: *mut i32,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
+    pub fn CVI_NN_TensorPtr(tensor: *mut CVI_TENSOR) -> *mut ::std::os::raw::c_void;
+    pub fn CVI_NN_TensorSize(tensor: *mut CVI_TENSOR) -> usize;
+    pub fn CVI_NN_TensorCount(tensor: *mut CVI_TENSOR) -> usize;
+    pub fn CVI_NN_TensorShape(tensor: *mut CVI_TENSOR) -> CVI_SHAPE;
+    pub fn CVI_NN_TensorName(tensor: *mut CVI_TENSOR) -> *mut ::std::os::raw::c_char;
     pub fn CVI_NN_GetTensorByName(
-        name: *const ::std::ffi::c_char,
+        name: *const ::std::os::raw::c_char,
         tensors: *mut CVI_TENSOR,
         num: i32,
     ) -> *mut CVI_TENSOR;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorName(tensor: *mut CVI_TENSOR) -> *mut ::std::ffi::c_char;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorPtr(tensor: *mut CVI_TENSOR) -> *mut ::std::ffi::c_void;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorSize(tensor: *mut CVI_TENSOR) -> usize;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorCount(tensor: *mut CVI_TENSOR) -> usize;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorQuantScale(tensor: *mut CVI_TENSOR) -> f32;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorQuantZeroPoint(tensor: *mut CVI_TENSOR) -> ::std::ffi::c_int;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_TensorShape(tensor: *mut CVI_TENSOR) -> CVI_SHAPE;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_SetTensorPtr(tensor: *mut CVI_TENSOR, mem: *mut ::std::ffi::c_void) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_SetTensorPhysicalAddr(tensor: *mut CVI_TENSOR, paddr: u64) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_SetTensorWithVideoFrame(
-        model: CVI_MODEL_HANDLE,
-        tensor: *mut CVI_TENSOR,
-        video_frame_info: *mut CVI_VIDEO_FRAME_INFO,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_FeedTensorWithFrames(
-        model: CVI_MODEL_HANDLE,
-        tensor: *mut CVI_TENSOR,
-        type_: CVI_FRAME_TYPE,
-        format: CVI_FMT,
-        channel_num: i32,
-        channel_paddrs: *mut u64,
-        height: i32,
-        width: i32,
-        height_stride: u32,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_SetTensorWithAlignedFrames(
-        tensor: *mut CVI_TENSOR,
-        frame_paddrs: *mut u64,
-        frame_num: i32,
-        pixel_format: CVI_NN_PIXEL_FORMAT_E,
-    ) -> CVI_RC;
-}
-unsafe extern "C" {
-    pub fn CVI_NN_Global_SetSharedMemorySize(size: usize);
 }

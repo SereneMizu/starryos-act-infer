@@ -139,10 +139,7 @@ def main():
         "--mlir", str(MLIR_PATH),
         "--quantize", args.quantize,
         "--processor", args.processor,
-        "--num_core", "1",
-        "--addr_mode", "io_alone",
         "--model", str(output_path),
-        "--skip_validation",
     ]
 
     if test_npz.exists() and not args.skip_verify:
@@ -150,6 +147,8 @@ def main():
             "--test_input", str(test_npz),
             "--test_reference", str(WORK_DIR / "act_top_outputs.npz"),
         ]
+    else:
+        deploy_cmd += ["--skip_validation"]
 
     run(deploy_cmd)
 

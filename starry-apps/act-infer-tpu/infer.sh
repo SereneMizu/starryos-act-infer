@@ -6,8 +6,6 @@ DIR=/opt/act-infer/frames
 STATS=/opt/act-infer/stats.json
 REF=/opt/act-infer/reference.json
 
-export LD_LIBRARY_PATH=/usr/lib
-
 echo "=== ACT TPU Inference ==="
 echo "model:  $MODEL"
 echo "frames: $DIR"

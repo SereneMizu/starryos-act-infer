@@ -1,4 +1,5 @@
-mod ffi;
+#[path = "bindings.rs"]
+mod bindings;
 
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -9,7 +10,7 @@ use std::time::Instant;
 use clap::Parser;
 use serde::Deserialize;
 
-use ffi::{CviModelHandle, CviRuntime, CviTensor};
+use bindings::{CVI_FMT, CVI_MODEL_HANDLE, CVI_RC, CVI_TENSOR};
 
 macro_rules! ulog {
     ($($arg:tt)*) => {{
@@ -108,44 +109,45 @@ fn build_images_tensor(image_data: &[f32]) -> Vec<f32> {
     t
 }
 
-struct TpuModel<'a> {
-    rt: &'a CviRuntime,
-    handle: CviModelHandle,
-    inputs: *mut CviTensor,
+struct TpuModel {
+    handle: CVI_MODEL_HANDLE,
+    inputs: *mut CVI_TENSOR,
     input_num: i32,
-    outputs: *mut CviTensor,
+    outputs: *mut CVI_TENSOR,
     output_num: i32,
 }
 
-impl<'a> TpuModel<'a> {
-    fn load(rt: &'a CviRuntime, path: &Path) -> Result<Self, String> {
+impl TpuModel {
+    fn load(path: &Path) -> Result<Self, String> {
         let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
             .map_err(|e| format!("invalid path: {e}"))?;
 
-        ulog!("[ffi] about to call CVI_NN_RegisterModel({})", path.display());
-        let mut handle: CviModelHandle = ptr::null_mut();
-        let rc = unsafe { (rt.register_model)(c_path.as_ptr(), &mut handle) };
-        ulog!("[ffi] CVI_NN_RegisterModel returned rc={}", rc);
+        ulog!("[ffi] CVI_NN_RegisterModel({})", path.display());
+        let mut handle: CVI_MODEL_HANDLE = ptr::null_mut();
+        let rc: CVI_RC = unsafe { bindings::CVI_NN_RegisterModel(c_path.as_ptr(), &mut handle) };
+        ulog!("[ffi] CVI_NN_RegisterModel rc={}", rc);
         if rc != 0 {
             return Err(format!("CVI_NN_RegisterModel failed: rc={rc}"));
         }
 
-        ulog!("[ffi] about to call CVI_NN_GetInputOutputTensors");
-        let mut inputs: *mut CviTensor = ptr::null_mut();
+        ulog!("[ffi] CVI_NN_GetInputOutputTensors");
+        let mut inputs: *mut CVI_TENSOR = ptr::null_mut();
         let mut input_num: i32 = 0;
-        let mut outputs: *mut CviTensor = ptr::null_mut();
+        let mut outputs: *mut CVI_TENSOR = ptr::null_mut();
         let mut output_num: i32 = 0;
 
-        let rc = unsafe {
-            (rt.get_io_tensors)(handle, &mut inputs, &mut input_num, &mut outputs, &mut output_num)
+        let rc: CVI_RC = unsafe {
+            bindings::CVI_NN_GetInputOutputTensors(
+                handle, &mut inputs, &mut input_num, &mut outputs, &mut output_num,
+            )
         };
-        ulog!("[ffi] CVI_NN_GetInputOutputTensors returned rc={}", rc);
+        ulog!("[ffi] CVI_NN_GetInputOutputTensors rc={}", rc);
         if rc != 0 {
-            unsafe { (rt.cleanup_model)(handle) };
+            unsafe { bindings::CVI_NN_CleanupModel(handle) };
             return Err(format!("CVI_NN_GetInputOutputTensors failed: rc={rc}"));
         }
 
-        Ok(Self { rt, handle, inputs, input_num, outputs, output_num })
+        Ok(Self { handle, inputs, input_num, outputs, output_num })
     }
 
     fn input_shape(&self, idx: isize) -> &[i32] {
@@ -158,16 +160,24 @@ impl<'a> TpuModel<'a> {
         &t.shape.dim[..t.shape.dim_size as usize]
     }
 
+    fn output_fmt(&self, idx: isize) -> CVI_FMT {
+        unsafe { (*self.outputs.offset(idx)).fmt }
+    }
+
     fn input_ptr(&self, idx: isize) -> *mut std::ffi::c_void {
-        unsafe { (self.rt.tensor_ptr)(self.inputs.offset(idx)) }
+        unsafe { bindings::CVI_NN_TensorPtr(self.inputs.offset(idx)) }
     }
 
     fn output_ptr(&self, idx: isize) -> *mut std::ffi::c_void {
-        unsafe { (self.rt.tensor_ptr)(self.outputs.offset(idx)) }
+        unsafe { bindings::CVI_NN_TensorPtr(self.outputs.offset(idx)) }
     }
 
     fn run(&self) -> Result<(), String> {
-        let rc = unsafe { (self.rt.forward)(self.handle, self.inputs, self.input_num, self.outputs, self.output_num) };
+        let rc: CVI_RC = unsafe {
+            bindings::CVI_NN_Forward(
+                self.handle, self.inputs, self.input_num, self.outputs, self.output_num,
+            )
+        };
         if rc != 0 {
             return Err(format!("CVI_NN_Forward failed: rc={rc}"));
         }
@@ -175,10 +185,10 @@ impl<'a> TpuModel<'a> {
     }
 }
 
-impl<'a> Drop for TpuModel<'a> {
+impl Drop for TpuModel {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            unsafe { (self.rt.cleanup_model)(self.handle) };
+            unsafe { bindings::CVI_NN_CleanupModel(self.handle) };
         }
     }
 }
@@ -224,9 +234,23 @@ struct FrameResult {
     turn: String,
 }
 
-fn read_from_tensor(ptr: *const u8, len: usize) -> Vec<f32> {
+fn bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
+fn read_fp32_from_tensor(ptr: *const u8, len: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; len];
     unsafe { ptr::copy_nonoverlapping(ptr as *const f32, out.as_mut_ptr(), len) }
+    out
+}
+
+fn read_bf16_from_tensor(ptr: *const u8, len: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(len);
+    let bf16_ptr = ptr as *const u16;
+    for i in 0..len {
+        let bits = unsafe { *bf16_ptr.add(i) };
+        out.push(bf16_to_f32(bits));
+    }
     out
 }
 
@@ -293,8 +317,6 @@ fn main() {
         None
     };
 
-    let rt = CviRuntime::load().expect("failed to load cviruntime");
-
     let norm = NormParams::load(&args.stats);
     println!(
         "[stats] state_dim={}  action_dim={}",
@@ -303,7 +325,7 @@ fn main() {
     );
 
     let t = Instant::now();
-    let model = TpuModel::load(&rt, &args.model).expect("failed to load cvimodel");
+    let model = TpuModel::load(&args.model).expect("failed to load cvimodel");
     let load_ms = t.elapsed().as_millis();
     ulog!("[emerg] model loaded in {load_ms}ms, handle={:p}, inputs={:p}, outputs={:p}, in_num={}, out_num={}",
         model.handle, model.inputs, model.outputs, model.input_num, model.output_num);
@@ -315,36 +337,34 @@ fn main() {
     ulog!("[emerg] input_shape(1) = {state_shape:?}");
     let action_shape = model.output_shape(0);
     ulog!("[emerg] output_shape(0) = {action_shape:?}");
+    let output_fmt = model.output_fmt(0);
+    ulog!("[emerg] output_fmt(0) = {:?}", output_fmt);
     println!(
-        "[tpu] input:{} images={:?} state={:?}  output:{} action={:?}",
+        "[tpu] input:{} images={:?} state={:?}  output:{} action={:?} fmt={:?}",
         model.input_num, img_shape, state_shape,
-        model.output_num, action_shape,
+        model.output_num, action_shape, output_fmt,
     );
 
-    let img_tensor_ptr = model.input_ptr(0) as *mut f32;
-    let state_tensor_ptr = model.input_ptr(1) as *mut f32;
-    let out_tensor_ptr = model.output_ptr(0) as *mut f32;
+    let img_tensor_ptr = model.input_ptr(0);
+    let state_tensor_ptr = model.input_ptr(1);
+    let out_tensor_ptr = model.output_ptr(0);
     println!(
         "[tpu] tensor ptrs  images={img_tensor_ptr:p}  state={state_tensor_ptr:p}  output={out_tensor_ptr:p}"
     );
     if img_tensor_ptr.is_null() || state_tensor_ptr.is_null() || out_tensor_ptr.is_null() {
-        panic!("NULL tensor pointer: images={img_tensor_ptr:p} state={state_tensor_ptr:p} output={out_tensor_ptr:p}");
+        panic!("NULL tensor pointer");
     }
 
     if args.track_mem {
         print_mem("after model load");
     }
 
-    ulog!("[emerg] normalizing state ...");
     let state_dim = state_shape[1] as usize;
     let raw_state = vec![0.0f32; state_dim];
     let normalized_state = norm.normalize_state(&raw_state);
-    ulog!("[emerg] state normalized, dim={}", normalized_state.len());
 
-    ulog!("[emerg] collecting frames from {}", args.dir.display());
     let frames = collect_frames(&args.dir);
     let n = frames.len();
-    ulog!("[emerg] {} frames collected", n);
     println!("[infer] {n} frames in {}", args.dir.display());
 
     let reference = args.reference.as_ref().map(|p| load_reference(p));
@@ -359,35 +379,26 @@ fn main() {
         let name = frame_path.file_name().unwrap_or_default().to_string_lossy().to_string();
         ulog!("[dbg] [{}/{}] {}", i + 1, n, name);
 
-        ulog!("[dbg] [{}/{}] preprocessing ...", i + 1, n);
         let img_data = preprocess_image(frame_path);
-        ulog!("[dbg] [{}/{}] preprocessing done, img pixels={}", i + 1, n, img_data.len());
-
         let img_tensor = build_images_tensor(&img_data);
-        ulog!("[dbg] [{}/{}] tensor built, size={}", i + 1, n, img_tensor.len());
 
         let inp0 = model.input_ptr(0) as *mut f32;
         let inp1 = model.input_ptr(1) as *mut f32;
-        ulog!("[dbg] [{}/{}] input_ptrs: images={inp0:p} state={inp1:p}", i + 1, n);
 
         unsafe {
-            ulog!("[dbg] [{}/{}] copying image tensor to TPU -> {} elems", i + 1, n, img_tensor.len());
             ptr::copy_nonoverlapping(img_tensor.as_ptr(), inp0, img_tensor.len());
-            ulog!("[dbg] [{}/{}] copying state tensor to TPU -> {} elems", i + 1, n, normalized_state.len());
             ptr::copy_nonoverlapping(normalized_state.as_ptr(), inp1, normalized_state.len());
-            ulog!("[dbg] [{}/{}] tensor copy done", i + 1, n);
         }
 
         let t_infer = Instant::now();
-        ulog!("[dbg] [{}/{}] running CVI_NN_Forward ...", i + 1, n);
         model.run().expect("CVI_NN_Forward failed");
-        ulog!("[dbg] [{}/{}] forward done", i + 1, n);
         let infer_us = t_infer.elapsed().as_micros();
 
         let out0 = model.output_ptr(0) as *const u8;
-        ulog!("[dbg] [{}/{}] reading output from {out0:p}, action_dim={}", i + 1, n, action_dim);
-        let raw = read_from_tensor(out0, action_dim);
-        ulog!("[dbg] [{}/{}] output read: raw[0]={}, raw[1]={}", i + 1, n, raw[0], raw[1]);
+        let raw = match output_fmt {
+            CVI_FMT::CVI_FMT_BF16 => read_bf16_from_tensor(out0, action_dim),
+            _ => read_fp32_from_tensor(out0, action_dim),
+        };
         let action = norm.denorm_action(&raw);
 
         let left_vel = action[0];

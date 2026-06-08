@@ -16,7 +16,6 @@ TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
 STATS_JSON="$proj/output/dataset/meta/stats.json"
 FRAMES_DIR="$proj/output/dataset/videos/observation.images.fpv/chunk-000"
 REF_JSON="$proj/output/infer_results_onnx.json"
-CVI_LIB_DIR="$proj/sg2002-libs"
 INFER_SH="$proj/starry-apps/act-infer-tpu/infer.sh"
 APP_DEST="/opt/act-infer"
 
@@ -88,12 +87,7 @@ cp "$out/workspace_sg2002.uimg" "$mnt/workspace_sg2002.uimg" 2>/dev/null || true
 # --- 安装 TPU 推理应用 ---
 
 echo "[sg2002] installing app ..."
-mkdir -p "$mnt/usr/lib" "$mnt/usr/bin" "$mnt$APP_DEST"
-
-for lib in "$CVI_LIB_DIR"/*.so*; do
-    cp "$lib" "$mnt/usr/lib/"
-    echo "  [lib] $(basename "$lib")"
-done
+mkdir -p "$mnt/usr/bin" "$mnt$APP_DEST"
 
 cp "$TPU_BIN" "$mnt/usr/bin/act-infer-tpu"
 chmod +x "$mnt/usr/bin/act-infer-tpu"
@@ -103,6 +97,12 @@ cp -r "$FRAMES_DIR" "$mnt$APP_DEST/frames"
 cp "$REF_JSON" "$mnt$APP_DEST/reference.json" 2>/dev/null || true
 cp "$INFER_SH" "$mnt$APP_DEST/infer.sh"
 chmod +x "$mnt$APP_DEST/infer.sh"
+
+# --- C++ 运行时（libstdc++ 已静态链接，仅剩 libgcc_s 动态）---
+
+echo "[sg2002] installing runtime libs ..."
+cp "$proj/sg2002-libs/libgcc_s.so.1" "$mnt/lib/"
+ln -sf libgcc_s.so.1 "$mnt/lib/libgcc_s.so"
 
 # --- 卸载并生成最终镜像 ---
 
