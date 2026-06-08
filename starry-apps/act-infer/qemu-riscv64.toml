@@ -21,4 +21,4 @@ fail_regex = [
     "(?i)bus error",
     "(?i)out of memory",
 ]
-timeout = 120
+timeout = 600

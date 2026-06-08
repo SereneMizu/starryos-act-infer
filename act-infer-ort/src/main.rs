@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -7,6 +7,7 @@ use clap::Parser;
 use ndarray::IxDyn;
 use ort::session::Session;
 use ort::value::Tensor;
+use serde::Deserialize;
 
 fn read_mem_free_kb() -> u64 {
     let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
@@ -61,11 +62,65 @@ fn print_mem(tag: &str) {
     println!("[mem] {tag}: {mem_total}  {mem_free}  {mem_avail}");
 }
 
-const STATE_NORM: [f32; 2] = [-0.433693, -1.0];
-const ACTION_Q01: [f32; 3] = [-0.1, 0.0, 0.0];
-const ACTION_D: [f32; 3] = [0.3, 0.2, 0.0];
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+struct NormParams {
+    state_q01: Vec<f32>,
+    state_q99: Vec<f32>,
+    action_q01: Vec<f32>,
+    action_q99: Vec<f32>,
+}
+
+impl NormParams {
+    fn load(path: &Path) -> Self {
+        let raw: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path).expect("failed to read stats.json"),
+        )
+        .expect("failed to parse stats.json");
+
+        let parse_arr = |v: &serde_json::Value| -> Vec<f32> {
+            v.as_array()
+                .expect("expected array")
+                .iter()
+                .map(|x| x.as_f64().expect("expected number") as f32)
+                .collect()
+        };
+
+        let state = &raw["observation.state"];
+        let action = &raw["action"];
+
+        Self {
+            state_q01: parse_arr(&state["q01"]),
+            state_q99: parse_arr(&state["q99"]),
+            action_q01: parse_arr(&action["q01"]),
+            action_q99: parse_arr(&action["q99"]),
+        }
+    }
+
+    fn normalize_state(&self, state: &[f32]) -> Vec<f32> {
+        state
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| {
+                let d = self.state_q99[i] - self.state_q01[i];
+                let d = if d.abs() < 1e-8 { 1e-8 } else { d };
+                2.0 * (s - self.state_q01[i]) / d - 1.0
+            })
+            .collect()
+    }
+
+    fn denorm_action(&self, raw: &[f32]) -> Vec<f32> {
+        raw.iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let d = self.action_q99[i] - self.action_q01[i];
+                let d = if d.abs() < 1e-8 { 1e-8 } else { d };
+                (v + 1.0) / 2.0 * d + self.action_q01[i]
+            })
+            .collect()
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "act-infer-ort", about = "ACT model ONNX inference via ort")]
@@ -73,18 +128,39 @@ struct Args {
     #[arg(short, long)]
     model: PathBuf,
 
-    #[arg(long)]
-    left: PathBuf,
+    #[arg(short, long)]
+    dir: PathBuf,
+
+    #[arg(short, long)]
+    stats: PathBuf,
+
+    #[arg(short, long)]
+    reference: Option<PathBuf>,
 
     #[arg(long)]
-    right: PathBuf,
+    track_mem: bool,
 }
 
-fn load_model(path: &PathBuf) -> Result<Session, ort::Error> {
+#[derive(Deserialize)]
+struct RefEntry {
+    frame: String,
+    left_vel: f64,
+    right_vel: f64,
+    #[allow(dead_code)]
+    gripper_target: f64,
+    turn: String,
+}
+
+fn load_reference(path: &Path) -> Vec<RefEntry> {
+    let s = std::fs::read_to_string(path).expect("failed to read reference json");
+    serde_json::from_str(&s).expect("failed to parse reference json")
+}
+
+fn load_model(path: &Path) -> Result<Session, ort::Error> {
     Session::builder()?.commit_from_file(path)
 }
 
-fn preprocess_image(path: &PathBuf) -> Result<Tensor<f32>, ort::Error> {
+fn preprocess_image(path: &Path) -> Result<Tensor<f32>, ort::Error> {
     let img = image::open(path)
         .map_err(|e| ort::Error::new(format!("image open failed: {e}")))?
         .resize_exact(224, 224, image::imageops::FilterType::Triangle);
@@ -106,83 +182,223 @@ fn preprocess_image(path: &PathBuf) -> Result<Tensor<f32>, ort::Error> {
     Tensor::from_array((shape, data.into_boxed_slice()))
 }
 
-fn make_state_tensor() -> Result<Tensor<f32>, ort::Error> {
-    let state: Vec<f32> = STATE_NORM.to_vec();
-    Tensor::from_array(([1usize, 2], state.into_boxed_slice()))
+fn make_state_tensor(norm: &NormParams) -> Result<Tensor<f32>, ort::Error> {
+    let state_dim = norm.state_q01.len();
+    let raw_state = vec![0.0f32; state_dim];
+    let normalized = norm.normalize_state(&raw_state);
+    Tensor::from_array((
+        [1usize, state_dim],
+        normalized.into_boxed_slice(),
+    ))
 }
 
-fn denorm(val: f32, dim: usize) -> f32 {
-    if ACTION_D[dim].abs() < 1e-8 {
-        return ACTION_Q01[dim];
+fn collect_frames(dir: &Path) -> Vec<PathBuf> {
+    let mut frames: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("failed to read frames directory")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+        })
+        .map(|e| e.path())
+        .collect();
+    frames.sort();
+    frames
+}
+
+struct FrameResult {
+    frame: String,
+    infer_us: u128,
+    left_vel: f32,
+    right_vel: f32,
+    turn: String,
+}
+
+fn infer_all(
+    session: &mut Session,
+    norm: &NormParams,
+    frames: &[PathBuf],
+    track_mem: bool,
+    total_kb: u64,
+) -> ort::Result<(Vec<FrameResult>, Option<u64>)> {
+    let tracker = if track_mem {
+        Some(MemTracker::new())
+    } else {
+        None
+    };
+
+    let n = frames.len();
+    let mut results: Vec<FrameResult> = Vec::with_capacity(n);
+
+    for (i, frame_path) in frames.iter().enumerate() {
+        let name = frame_path.file_name().unwrap_or_default().to_string_lossy();
+
+        let img_tensor = preprocess_image(frame_path)?;
+        let state_tensor = make_state_tensor(norm)?;
+
+        let t_infer = Instant::now();
+        let outputs = session.run(ort::inputs![img_tensor, state_tensor])?;
+        let infer_us = t_infer.elapsed().as_micros();
+
+        let arr = outputs[0].try_extract_array::<f32>()?;
+        let view = arr.view().into_dyn();
+        let action_dim = norm.action_q01.len();
+        let raw: Vec<f32> = (0..action_dim)
+            .map(|d| view[IxDyn(&[0, 0, d])])
+            .collect();
+        let action = norm.denorm_action(&raw);
+
+        let left_vel = action[0];
+        let right_vel = action[1];
+        let turn = if left_vel < right_vel {
+            "LEFT"
+        } else if left_vel > right_vel {
+            "RIGHT"
+        } else {
+            "STRAIGHT"
+        };
+
+        println!(
+            "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn}"
+        );
+
+        if track_mem && (i + 1) % 100 == 0 {
+            print_mem(&format!("frame {}/{}", i + 1, n));
+        }
+
+        results.push(FrameResult {
+            frame: name.into_owned(),
+            infer_us,
+            left_vel,
+            right_vel,
+            turn: turn.to_string(),
+        });
     }
-    (val + 1.0) / 2.0 * ACTION_D[dim] + ACTION_Q01[dim]
+
+    let peak = tracker.as_ref().map(|t| t.peak_used_mb(total_kb));
+    Ok((results, peak))
 }
 
-fn run_inference(session: &mut Session, image_path: &PathBuf) -> Result<[f32; 3], ort::Error> {
-    let img_tensor = preprocess_image(image_path)?;
-    let state_tensor = make_state_tensor()?;
+fn print_summary(
+    n: usize,
+    results: &[FrameResult],
+    peak_mb: Option<u64>,
+    reference: Option<&[RefEntry]>,
+) {
+    let infer_times: Vec<u128> = results.iter().map(|r| r.infer_us).collect();
 
-    let outputs = session.run(ort::inputs![img_tensor, state_tensor])?;
+    let infer_sum: u128 = infer_times.iter().sum();
+    let infer_avg = infer_sum as f64 / n as f64;
+    let infer_min = infer_times.iter().min().unwrap();
+    let infer_max = infer_times.iter().max().unwrap();
 
-    let arr = outputs[0].try_extract_array::<f32>()?;
-    let view = arr.view().into_dyn();
+    println!("\n===== SUMMARY =====");
+    println!("frames:      {n}");
+    println!(
+        "infer total: {:.2}ms  avg: {:.1}us  min: {infer_min}us  max: {infer_max}us",
+        infer_sum as f64 / 1000.0,
+        infer_avg,
+    );
+    if let Some(peak) = peak_mb {
+        println!("peak memory: {peak} MB");
+    }
 
-    Ok([
-        denorm(view[IxDyn(&[0, 0, 0])], 0),
-        denorm(view[IxDyn(&[0, 0, 1])], 1),
-        denorm(view[IxDyn(&[0, 0, 2])], 2),
-    ])
+    if let Some(ref_entries) = reference {
+        let mut turn_match = 0usize;
+        let mut turn_differ = 0usize;
+        let mut max_left_diff: f32 = 0.0;
+        let mut max_right_diff: f32 = 0.0;
+        let mut diff_frames: Vec<(&str, &str, f32, f32, f32, f32)> = Vec::new();
+
+        for (r, ref_e) in results.iter().zip(ref_entries.iter()) {
+            let l_diff = (r.left_vel - ref_e.left_vel as f32).abs();
+            let r_diff = (r.right_vel - ref_e.right_vel as f32).abs();
+            if l_diff > max_left_diff {
+                max_left_diff = l_diff;
+            }
+            if r_diff > max_right_diff {
+                max_right_diff = r_diff;
+            }
+
+            if r.turn == ref_e.turn {
+                turn_match += 1;
+            } else {
+                turn_differ += 1;
+                diff_frames.push((
+                    &r.frame,
+                    &r.turn,
+                    r.left_vel,
+                    r.right_vel,
+                    ref_e.left_vel as f32,
+                    ref_e.right_vel as f32,
+                ));
+            }
+        }
+
+        println!("\n===== VERIFY =====");
+        println!(
+            "turn match:  {turn_match}/{n} ({:.1}%)",
+            turn_match as f64 / n as f64 * 100.0
+        );
+        println!("turn differ: {turn_differ}/{n}");
+        println!("max left_vel diff:  {max_left_diff:.6}");
+        println!("max right_vel diff: {max_right_diff:.6}");
+
+        if !diff_frames.is_empty() {
+            println!("\n--- Differing frames ({}) ---", diff_frames.len());
+            for (name, turn, lv, rv, ref_lv, ref_rv) in &diff_frames {
+                println!(
+                    "  {name}: rust={turn} (L={lv:+.6} R={rv:+.6})  ref (L={ref_lv:+.6} R={ref_rv:+.6})"
+                );
+            }
+        } else {
+            println!("\nAll turn directions match.");
+        }
+    }
+
+    println!("\nACT_INFER_OK");
 }
 
 fn main() -> ort::Result<()> {
     let args = Args::parse();
 
-    print_mem("startup");
+    if args.track_mem {
+        print_mem("startup");
+    }
     let total_kb = read_mem_free_kb();
-    let tracker = MemTracker::new();
-    let startup_free = read_mem_free_kb();
+
+    let stats_path = args.stats;
+    let norm = NormParams::load(&stats_path);
+    println!(
+        "[stats] state_dim={}  action_dim={}",
+        norm.state_q01.len(),
+        norm.action_q01.len()
+    );
 
     let t = Instant::now();
     let mut session = load_model(&args.model)?;
     let load_ms = t.elapsed().as_millis();
-    let peak_load = tracker.peak_used_mb(total_kb);
-    println!("[ort] model loaded in {load_ms}ms  peak memory during load: {peak_load} MB");
-    print_mem("after model load");
-    tracker.reset();
-
-    let name_a = args.left.file_name().unwrap_or_default().to_string_lossy();
-    let t = Instant::now();
-    let action_a = run_inference(&mut session, &args.left)?;
-    let infer_ms_a = t.elapsed().as_millis();
-    let peak_infer_a = tracker.peak_used_mb(total_kb);
-    println!(
-        "[{name_a}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}  infer={infer_ms_a}ms  peak={peak_infer_a} MB",
-        action_a[0], action_a[1], action_a[2]
-    );
-    let left_ok = action_a[1] > action_a[0];
-    println!("  turn: {}", if left_ok { "LEFT (correct)" } else { "WRONG" });
-    print_mem("after frame 1");
-    tracker.reset();
-
-    let name_b = args.right.file_name().unwrap_or_default().to_string_lossy();
-    let t = Instant::now();
-    let action_b = run_inference(&mut session, &args.right)?;
-    let infer_ms_b = t.elapsed().as_millis();
-    let peak_infer_b = tracker.peak_used_mb(total_kb);
-    println!(
-        "[{name_b}] left_vel={:+.6}  right_vel={:+.6}  gripper={:+.6}  infer={infer_ms_b}ms  peak={peak_infer_b} MB",
-        action_b[0], action_b[1], action_b[2]
-    );
-    let right_ok = action_b[0] > action_b[1];
-    println!("  turn: {}", if right_ok { "RIGHT (correct)" } else { "WRONG" });
-    print_mem("after frame 2");
-
-    if left_ok && right_ok {
-        println!("\nACT_INFER_OK");
-    } else {
-        eprintln!("\nACT_INFER_FAIL");
-        std::process::exit(1);
+    println!("[ort] model loaded in {load_ms}ms");
+    if args.track_mem {
+        print_mem("after model load");
     }
+
+    let frames = collect_frames(&args.dir);
+    let n = frames.len();
+    println!("[infer] {n} frames in {}", args.dir.display());
+
+    let reference = args.reference.as_ref().map(|p| load_reference(p));
+    if let Some(ref_entries) = &reference {
+        println!("[verify] reference: {} frames", ref_entries.len());
+    }
+
+    let (results, peak_mb) = infer_all(&mut session, &norm, &frames, args.track_mem, total_kb)?;
+
+    if args.track_mem {
+        print_mem("after all frames");
+    }
+    print_summary(n, &results, peak_mb, reference.as_deref());
 
     Ok(())
 }

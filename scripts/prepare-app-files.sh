@@ -11,5 +11,7 @@ install -Dm0755 "$project_root/act-infer-ort/target/riscv64gc-unknown-linux-musl
 install -Dm0644 "$project_root/output/train/model.onnx" "$dst/model.onnx"
 
 img_dir="$project_root/output/dataset/videos/observation.images.fpv/chunk-000"
-install -Dm0644 "$img_dir/frame_000000.jpg" "$dst/frame_000000.jpg"
-install -Dm0644 "$img_dir/frame_000227.jpg" "$dst/frame_000227.jpg"
+rm -rf "$dst/frames"
+mkdir -p "$dst/frames"
+cp "$img_dir"/*.jpg "$dst/frames/"
+install -Dm0644 "$project_root/output/dataset/meta/stats.json" "$dst/stats.json"

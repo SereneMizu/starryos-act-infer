@@ -32,11 +32,11 @@ all: onnx test
 
 onnx: verify
 
-export: $(MODEL_ONNX)
+export: venv $(MODEL_ONNX)
 
-infer-all-torch: $(RESULT_TORCH)
+infer-all-torch: venv $(RESULT_TORCH)
 
-infer-all-onnx: $(RESULT_ONNX)
+infer-all-onnx: venv $(RESULT_ONNX)
 
 infer-all: onnx
 
@@ -46,13 +46,13 @@ verify: $(RESULT_TORCH) $(RESULT_ONNX)
 venv:
 	uv pip install -r requirements.txt
 
-$(MODEL_ONNX): venv scripts/export_onnx.py $(MODEL_PT)
+$(MODEL_ONNX): scripts/export_onnx.py $(MODEL_PT)
 	$(PYTHON) scripts/export_onnx.py
 
-$(RESULT_TORCH): scripts/batch_infer_torch.py venv $(MODEL_PT)
+$(RESULT_TORCH): scripts/batch_infer_torch.py $(MODEL_PT)
 	$(PYTHON) scripts/batch_infer_torch.py
 
-$(RESULT_ONNX): scripts/batch_infer_onnx.py venv $(MODEL_ONNX)
+$(RESULT_ONNX): scripts/batch_infer_onnx.py $(MODEL_ONNX)
 	$(PYTHON) scripts/batch_infer_onnx.py
 # --- Docker ---
 
@@ -77,11 +77,12 @@ build-host:
 	rustup default stable 2>/dev/null || true
 	cd act-infer-ort && cargo build --release
 
-host-test: build-host $(MODEL_ONNX)
+host-test: build-host
 	bash scripts/install-ort.sh
 	$(HOST_BIN) --model $(MODEL_ONNX) \
 		--dir $(IMG_DIR) \
-		--stats output/dataset/meta/stats.json
+		--stats output/dataset/meta/stats.json \
+		--reference $(RESULT_ONNX)
 
 # --- Cross-compile act-infer-ort ---
 
