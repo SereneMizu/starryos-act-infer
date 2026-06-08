@@ -1,5 +1,5 @@
 .PHONY: all clean \
-        export verify quantize quantize-int8 \
+        export-onnx verify-onnx quantize quantize-int8 \
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
         test-host test-qemu build-sg2002 sg2002-sdcard
@@ -39,11 +39,11 @@ SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
-all: export verify
+all: export-onnx verify-onnx
 
 # === Python pipeline (host) ===
 
-export: $(MODEL_ONNX)
+export-onnx: $(MODEL_ONNX)
 
 $(MODEL_ONNX): scripts/export_onnx.py $(MODEL_PT)
 	$(PYTHON) scripts/export_onnx.py
@@ -54,7 +54,7 @@ $(RESULT_TORCH): scripts/batch_infer_torch.py $(MODEL_PT)
 $(RESULT_ONNX): scripts/batch_infer_onnx.py $(MODEL_ONNX)
 	$(PYTHON) scripts/batch_infer_onnx.py
 
-verify: $(RESULT_TORCH) $(RESULT_ONNX)
+verify-onnx: $(RESULT_TORCH) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_TORCH) --result $(RESULT_ONNX)
 
 $(MODEL_FP16): scripts/quantize_onnx.py $(MODEL_ONNX)
@@ -126,7 +126,7 @@ build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
 
-sg2002-sdcard: build-sg2002 verify
+sg2002-sdcard: build-sg2002 verify-onnx
 	sudo bash scripts/build-sg2002-sdcard.sh
 
 # === Rootfs ===
