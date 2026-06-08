@@ -126,7 +126,7 @@ build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
 
-sg2002-sdcard: build-sg2002
+sg2002-sdcard: build-sg2002 verify
 	sudo bash scripts/build-sg2002-sdcard.sh
 
 # === Rootfs ===
