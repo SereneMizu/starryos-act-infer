@@ -122,7 +122,7 @@ $(SG2002_UIMG): docker-up
 		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
 
 build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
-	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16
+	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16 --processor cv181x
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	bash scripts/build-sg2002-sdcard.sh
 

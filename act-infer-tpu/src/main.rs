@@ -11,6 +11,14 @@ use serde::Deserialize;
 
 use ffi::{CviModelHandle, CviRuntime, CviTensor};
 
+macro_rules! ulog {
+    ($($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        let msg = msg + "\n";
+        unsafe { libc::write(libc::STDERR_FILENO, msg.as_ptr() as *const _, msg.len()); }
+    }};
+}
+
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
@@ -104,7 +112,9 @@ struct TpuModel<'a> {
     rt: &'a CviRuntime,
     handle: CviModelHandle,
     inputs: *mut CviTensor,
+    input_num: i32,
     outputs: *mut CviTensor,
+    output_num: i32,
 }
 
 impl<'a> TpuModel<'a> {
@@ -112,12 +122,15 @@ impl<'a> TpuModel<'a> {
         let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
             .map_err(|e| format!("invalid path: {e}"))?;
 
+        ulog!("[ffi] about to call CVI_NN_RegisterModel({})", path.display());
         let mut handle: CviModelHandle = ptr::null_mut();
         let rc = unsafe { (rt.register_model)(c_path.as_ptr(), &mut handle) };
+        ulog!("[ffi] CVI_NN_RegisterModel returned rc={}", rc);
         if rc != 0 {
             return Err(format!("CVI_NN_RegisterModel failed: rc={rc}"));
         }
 
+        ulog!("[ffi] about to call CVI_NN_GetInputOutputTensors");
         let mut inputs: *mut CviTensor = ptr::null_mut();
         let mut input_num: i32 = 0;
         let mut outputs: *mut CviTensor = ptr::null_mut();
@@ -126,12 +139,13 @@ impl<'a> TpuModel<'a> {
         let rc = unsafe {
             (rt.get_io_tensors)(handle, &mut inputs, &mut input_num, &mut outputs, &mut output_num)
         };
+        ulog!("[ffi] CVI_NN_GetInputOutputTensors returned rc={}", rc);
         if rc != 0 {
             unsafe { (rt.cleanup_model)(handle) };
             return Err(format!("CVI_NN_GetInputOutputTensors failed: rc={rc}"));
         }
 
-        Ok(Self { rt, handle, inputs, outputs })
+        Ok(Self { rt, handle, inputs, input_num, outputs, output_num })
     }
 
     fn input_shape(&self, idx: isize) -> &[i32] {
@@ -144,16 +158,16 @@ impl<'a> TpuModel<'a> {
         &t.shape.dim[..t.shape.dim_size as usize]
     }
 
-    fn input_ptr(&self, idx: isize) -> *mut u8 {
+    fn input_ptr(&self, idx: isize) -> *mut std::ffi::c_void {
         unsafe { (self.rt.tensor_ptr)(self.inputs.offset(idx)) }
     }
 
-    fn output_ptr(&self, idx: isize) -> *mut u8 {
+    fn output_ptr(&self, idx: isize) -> *mut std::ffi::c_void {
         unsafe { (self.rt.tensor_ptr)(self.outputs.offset(idx)) }
     }
 
     fn run(&self) -> Result<(), String> {
-        let rc = unsafe { (self.rt.forward)(self.handle, self.inputs, self.outputs) };
+        let rc = unsafe { (self.rt.forward)(self.handle, self.inputs, self.input_num, self.outputs, self.output_num) };
         if rc != 0 {
             return Err(format!("CVI_NN_Forward failed: rc={rc}"));
         }
@@ -189,6 +203,7 @@ struct Args {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct RefEntry {
     frame: String,
     left_vel: f64,
@@ -266,6 +281,7 @@ impl MemTracker {
 
 fn main() {
     let args = Args::parse();
+    ulog!("[boot] act-infer-tpu starting, model={}, dir={}", args.model.display(), args.dir.display());
 
     if args.track_mem {
         print_mem("startup");
@@ -289,26 +305,46 @@ fn main() {
     let t = Instant::now();
     let model = TpuModel::load(&rt, &args.model).expect("failed to load cvimodel");
     let load_ms = t.elapsed().as_millis();
+    ulog!("[emerg] model loaded in {load_ms}ms, handle={:p}, inputs={:p}, outputs={:p}, in_num={}, out_num={}",
+        model.handle, model.inputs, model.outputs, model.input_num, model.output_num);
     println!("[tpu] model loaded in {load_ms}ms");
 
     let img_shape = model.input_shape(0);
+    ulog!("[emerg] input_shape(0) = {img_shape:?}");
     let state_shape = model.input_shape(1);
+    ulog!("[emerg] input_shape(1) = {state_shape:?}");
     let action_shape = model.output_shape(0);
+    ulog!("[emerg] output_shape(0) = {action_shape:?}");
     println!(
-        "[tpu] input images:  {:?}  state: {:?}  output: {:?}",
-        img_shape, state_shape, action_shape
+        "[tpu] input:{} images={:?} state={:?}  output:{} action={:?}",
+        model.input_num, img_shape, state_shape,
+        model.output_num, action_shape,
     );
+
+    let img_tensor_ptr = model.input_ptr(0) as *mut f32;
+    let state_tensor_ptr = model.input_ptr(1) as *mut f32;
+    let out_tensor_ptr = model.output_ptr(0) as *mut f32;
+    println!(
+        "[tpu] tensor ptrs  images={img_tensor_ptr:p}  state={state_tensor_ptr:p}  output={out_tensor_ptr:p}"
+    );
+    if img_tensor_ptr.is_null() || state_tensor_ptr.is_null() || out_tensor_ptr.is_null() {
+        panic!("NULL tensor pointer: images={img_tensor_ptr:p} state={state_tensor_ptr:p} output={out_tensor_ptr:p}");
+    }
 
     if args.track_mem {
         print_mem("after model load");
     }
 
+    ulog!("[emerg] normalizing state ...");
     let state_dim = state_shape[1] as usize;
     let raw_state = vec![0.0f32; state_dim];
     let normalized_state = norm.normalize_state(&raw_state);
+    ulog!("[emerg] state normalized, dim={}", normalized_state.len());
 
+    ulog!("[emerg] collecting frames from {}", args.dir.display());
     let frames = collect_frames(&args.dir);
     let n = frames.len();
+    ulog!("[emerg] {} frames collected", n);
     println!("[infer] {n} frames in {}", args.dir.display());
 
     let reference = args.reference.as_ref().map(|p| load_reference(p));
@@ -321,20 +357,37 @@ fn main() {
 
     for (i, frame_path) in frames.iter().enumerate() {
         let name = frame_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        ulog!("[dbg] [{}/{}] {}", i + 1, n, name);
 
+        ulog!("[dbg] [{}/{}] preprocessing ...", i + 1, n);
         let img_data = preprocess_image(frame_path);
+        ulog!("[dbg] [{}/{}] preprocessing done, img pixels={}", i + 1, n, img_data.len());
+
         let img_tensor = build_images_tensor(&img_data);
+        ulog!("[dbg] [{}/{}] tensor built, size={}", i + 1, n, img_tensor.len());
+
+        let inp0 = model.input_ptr(0) as *mut f32;
+        let inp1 = model.input_ptr(1) as *mut f32;
+        ulog!("[dbg] [{}/{}] input_ptrs: images={inp0:p} state={inp1:p}", i + 1, n);
 
         unsafe {
-            ptr::copy_nonoverlapping(img_tensor.as_ptr(), model.input_ptr(0) as *mut f32, img_tensor.len());
-            ptr::copy_nonoverlapping(normalized_state.as_ptr(), model.input_ptr(1) as *mut f32, normalized_state.len());
+            ulog!("[dbg] [{}/{}] copying image tensor to TPU -> {} elems", i + 1, n, img_tensor.len());
+            ptr::copy_nonoverlapping(img_tensor.as_ptr(), inp0, img_tensor.len());
+            ulog!("[dbg] [{}/{}] copying state tensor to TPU -> {} elems", i + 1, n, normalized_state.len());
+            ptr::copy_nonoverlapping(normalized_state.as_ptr(), inp1, normalized_state.len());
+            ulog!("[dbg] [{}/{}] tensor copy done", i + 1, n);
         }
 
         let t_infer = Instant::now();
+        ulog!("[dbg] [{}/{}] running CVI_NN_Forward ...", i + 1, n);
         model.run().expect("CVI_NN_Forward failed");
+        ulog!("[dbg] [{}/{}] forward done", i + 1, n);
         let infer_us = t_infer.elapsed().as_micros();
 
-        let raw = read_from_tensor(model.output_ptr(0), action_dim);
+        let out0 = model.output_ptr(0) as *const u8;
+        ulog!("[dbg] [{}/{}] reading output from {out0:p}, action_dim={}", i + 1, n, action_dim);
+        let raw = read_from_tensor(out0, action_dim);
+        ulog!("[dbg] [{}/{}] output read: raw[0]={}, raw[1]={}", i + 1, n, raw[0], raw[1]);
         let action = norm.denorm_action(&raw);
 
         let left_vel = action[0];

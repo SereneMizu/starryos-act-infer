@@ -1,34 +1,22 @@
-use std::ffi::{c_char, c_int, c_void};
+#[path = "bindings.rs"]
+mod bindings;
+
+use std::ffi::{c_char, c_void};
 
 use libloading::{Library, Symbol};
 
-pub type CviRc = c_int;
-pub type CviModelHandle = *mut c_void;
+use bindings::{CVI_MODEL_HANDLE, CVI_RC, CVI_TENSOR};
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct CviShape {
-    pub dim: [i32; 8],
-    pub dim_size: i32,
-}
-
-#[repr(C)]
-pub struct CviTensor {
-    pub name: [u8; 64],
-    pub shape: CviShape,
-    pub fmt: i32,
-    pub scale: f32,
-    pub zero_point: i32,
-    pub ptr: *mut u8,
-    pub physical_addr: u64,
-}
+pub type CviRc = CVI_RC;
+pub type CviModelHandle = CVI_MODEL_HANDLE;
+pub type CviTensor = CVI_TENSOR;
 
 type FnRegisterModel = unsafe extern "C" fn(*const c_char, *mut CviModelHandle) -> CviRc;
 type FnGetInputOutputTensors =
     unsafe extern "C" fn(CviModelHandle, *mut *mut CviTensor, *mut i32, *mut *mut CviTensor, *mut i32) -> CviRc;
-type FnForward = unsafe extern "C" fn(CviModelHandle, *mut CviTensor, *mut CviTensor) -> CviRc;
+type FnForward = unsafe extern "C" fn(CviModelHandle, *mut CviTensor, i32, *mut CviTensor, i32) -> CviRc;
 type FnCleanupModel = unsafe extern "C" fn(CviModelHandle) -> CviRc;
-type FnTensorPtr = unsafe extern "C" fn(*mut CviTensor) -> *mut u8;
+type FnTensorPtr = unsafe extern "C" fn(*mut CviTensor) -> *mut c_void;
 
 pub struct CviRuntime {
     pub register_model: Symbol<'static, FnRegisterModel>,

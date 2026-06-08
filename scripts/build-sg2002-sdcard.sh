@@ -12,7 +12,7 @@ OFFICIAL_IMG_URL="https://github.com/sipeed/LicheeRV-Nano-Build/releases/downloa
 ALPINE_ROOTFS_URL="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/releases/riscv64/alpine-minirootfs-3.23.4-riscv64.tar.gz"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
-TPU_CVMODEL="$proj/output/tpu/act_model_cv186x_bf16.cvimodel"
+TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
 STATS_JSON="$proj/output/dataset/meta/stats.json"
 FRAMES_DIR="$proj/output/dataset/videos/observation.images.fpv/chunk-000"
 REF_JSON="$proj/output/infer_results_onnx.json"
@@ -60,7 +60,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-partprobe "$LOOP"
+if ! [ -b "${LOOP}p1" ]; then
+    rm -f "${LOOP}p1" "${LOOP}p2" 2>/dev/null || true
+    partprobe "$LOOP"
+fi
+
 BOOT="${LOOP}p1"
 ROOT="${LOOP}p2"
 

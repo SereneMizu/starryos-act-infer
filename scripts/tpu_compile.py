@@ -80,7 +80,7 @@ def run(args, **kwargs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--quantize", default="BF16", choices=["F16", "BF16", "INT8", "F32"])
-    parser.add_argument("--processor", default="cv186x")
+    parser.add_argument("--processor", default="cv181x")
     parser.add_argument("--skip-export", action="store_true")
     parser.add_argument("--skip-verify", action="store_true", help="Skip cmodel accuracy verification")
     args = parser.parse_args()
@@ -139,6 +139,8 @@ def main():
         "--mlir", str(MLIR_PATH),
         "--quantize", args.quantize,
         "--processor", args.processor,
+        "--num_core", "1",
+        "--addr_mode", "io_alone",
         "--model", str(output_path),
         "--skip_validation",
     ]
