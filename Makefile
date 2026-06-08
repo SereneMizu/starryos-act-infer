@@ -1,5 +1,7 @@
-.PHONY: export verify docker docker-up docker-shell docker-down \
-       build-host cross-build prepare-rootfs prepare-app-files starry-link starry-test onnx test all clean \
+.PHONY: onnx test all clean \
+       venv export infer-all infer-all-torch infer-all-onnx verify \
+       docker docker-up docker-shell docker-down \
+       build-host cross-build prepare-rootfs prepare-app-files starry-link starry-test \
        sg2002-sdcard sg2002-clean
 
 PYTHON   ?= .venv/bin/python
@@ -17,26 +19,41 @@ CROSS_TARGET := riscv64gc-unknown-linux-musl
 CROSS_BIN    := act-infer-ort/target/$(CROSS_TARGET)/release/act-infer-ort
 
 IMG_DIR := output/dataset/videos/observation.images.fpv/chunk-000
-TEST_IMAGES := $(IMG_DIR)/frame_000000.jpg $(IMG_DIR)/frame_000227.jpg
 
 ROOTFS_BASE   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
 ROOTFS_APP    := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
 
+RESULT_TORCH := output/infer_results_torch.json
+RESULT_ONNX  := output/infer_results_onnx.json
+
 all: onnx test
 
-onnx: export verify
-test: host-test starry-test
+# --- ONNX pipeline: venv → export → torch infer → onnx infer → verify ---
 
-# --- ONNX export & verify ---
+onnx: verify
 
 export: $(MODEL_ONNX)
 
-$(MODEL_ONNX): scripts/export_onnx.py $(MODEL_PT)
-	$(PYTHON) scripts/export_onnx.py
+infer-all-torch: $(RESULT_TORCH)
 
-verify: $(MODEL_ONNX)
+infer-all-onnx: $(RESULT_ONNX)
+
+infer-all: onnx
+
+verify: $(RESULT_TORCH) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_onnx.py
 
+venv:
+	uv pip install -r requirements.txt
+
+$(MODEL_ONNX): venv scripts/export_onnx.py $(MODEL_PT)
+	$(PYTHON) scripts/export_onnx.py
+
+$(RESULT_TORCH): scripts/batch_infer_torch.py venv $(MODEL_PT)
+	$(PYTHON) scripts/batch_infer_torch.py
+
+$(RESULT_ONNX): scripts/batch_infer_onnx.py venv $(MODEL_ONNX)
+	$(PYTHON) scripts/batch_infer_onnx.py
 # --- Docker ---
 
 
@@ -63,8 +80,8 @@ build-host:
 host-test: build-host $(MODEL_ONNX)
 	bash scripts/install-ort.sh
 	$(HOST_BIN) --model $(MODEL_ONNX) \
-		--left $(word 1,$(TEST_IMAGES)) \
-		--right $(word 2,$(TEST_IMAGES))
+		--dir $(IMG_DIR) \
+		--stats output/dataset/meta/stats.json
 
 # --- Cross-compile act-infer-ort ---
 
@@ -114,9 +131,10 @@ sg2002-clean:
 
 clean:
 	rm -f $(MODEL_ONNX)
+	rm -f output/infer_results_torch.json output/infer_results_onnx.json
 	rm -f $(STARRY_APP_LINK)
 	rm -f starry-apps/act-infer/act-infer-ort
 	rm -f starry-apps/act-infer/model.onnx
-	rm -f starry-apps/act-infer/frame_*.jpg
+	rm -rf starry-apps/act-infer/frames
 	rm -rf act-infer-ort/target
 	rm -rf tgoskits/target
