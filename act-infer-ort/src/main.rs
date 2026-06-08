@@ -219,6 +219,7 @@ fn infer_all(
     session: &mut Session,
     norm: &NormParams,
     frames: &[PathBuf],
+    reference: Option<&[RefEntry]>,
     track_mem: bool,
     total_kb: u64,
 ) -> ort::Result<(Vec<FrameResult>, Option<u64>)> {
@@ -259,9 +260,28 @@ fn infer_all(
             "STRAIGHT"
         };
 
-        println!(
-            "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn}"
-        );
+        let ref_info = reference.as_ref().and_then(|refs| refs.get(i));
+        let match_tag = if let Some(ref_e) = ref_info {
+            let ref_turn = &ref_e.turn;
+            if turn == ref_turn.as_str() {
+                "OK"
+            } else {
+                "DIFF"
+            }
+        } else {
+            ""
+        };
+
+        if let Some(ref_e) = ref_info {
+            let ref_turn = &ref_e.turn;
+            println!(
+                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5} ref={ref_turn:<5} [{match_tag}]"
+            );
+        } else {
+            println!(
+                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5}"
+            );
+        }
 
         if track_mem && (i + 1) % 100 == 0 {
             print_mem(&format!("frame {}/{}", i + 1, n));
@@ -309,7 +329,7 @@ fn print_summary(
         let mut turn_differ = 0usize;
         let mut max_left_diff: f32 = 0.0;
         let mut max_right_diff: f32 = 0.0;
-        let mut diff_frames: Vec<(&str, &str, f32, f32, f32, f32)> = Vec::new();
+        let mut diff_frames: Vec<(&str, &str, f32, f32, &str, f32, f32)> = Vec::new();
 
         for (r, ref_e) in results.iter().zip(ref_entries.iter()) {
             let l_diff = (r.left_vel - ref_e.left_vel as f32).abs();
@@ -330,6 +350,7 @@ fn print_summary(
                     &r.turn,
                     r.left_vel,
                     r.right_vel,
+                    &ref_e.turn,
                     ref_e.left_vel as f32,
                     ref_e.right_vel as f32,
                 ));
@@ -347,11 +368,10 @@ fn print_summary(
 
         if !diff_frames.is_empty() {
             println!("\n--- Differing frames ({}) ---", diff_frames.len());
-            for (name, turn, lv, rv, ref_lv, ref_rv) in &diff_frames {
+            for (name, turn, lv, rv, ref_turn, ref_lv, ref_rv) in &diff_frames {
                 println!(
-                    "  {name}: rust={turn} (L={lv:+.6} R={rv:+.6})  ref (L={ref_lv:+.6} R={ref_rv:+.6})"
-                );
-            }
+                    "  {name}: rust={turn:<5} (L={lv:+.6} R={rv:+.6})  ref={ref_turn:<5} (L={ref_lv:+.6} R={ref_rv:+.6})"
+                );            }
         } else {
             println!("\nAll turn directions match.");
         }
@@ -393,7 +413,7 @@ fn main() -> ort::Result<()> {
         println!("[verify] reference: {} frames", ref_entries.len());
     }
 
-    let (results, peak_mb) = infer_all(&mut session, &norm, &frames, args.track_mem, total_kb)?;
+    let (results, peak_mb) = infer_all(&mut session, &norm, &frames, reference.as_deref(), args.track_mem, total_kb)?;
 
     if args.track_mem {
         print_mem("after all frames");
