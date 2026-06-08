@@ -1,5 +1,6 @@
 .PHONY: export verify docker docker-up docker-shell docker-down \
-       build-host cross-build prepare-rootfs prepare-app-files starry-link starry-test onnx test all clean
+       build-host cross-build prepare-rootfs prepare-app-files starry-link starry-test onnx test all clean \
+       sg2002-sdcard sg2002-clean
 
 PYTHON   ?= .venv/bin/python
 CARGO    ?= cargo
@@ -99,6 +100,15 @@ starry-link:
 
 starry-test: starry-link prepare-app-files prepare-rootfs
 	cd tgoskits && $(CARGO) xtask starry app qemu -t act-infer --arch riscv64
+
+# --- SG2002 SD card image ---
+
+sg2002-sdcard:
+	bash scripts/build-sg2002-sdcard.sh
+
+sg2002-clean:
+	sudo umount mnt/sg2002_rootfs 2>/dev/null || true
+	rm -rf output/sg2002
 
 # --- Clean ---
 
