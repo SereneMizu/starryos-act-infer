@@ -1,3 +1,4 @@
 [submodule "tgoskits"]
 	path = tgoskits
-	url = https://github.com/rcore-os/tgoskits.git
+	url = git@github.com:SereneMizu/tgoskits.git
+	branch = sg2002-plat-dyn-tpu-fix
