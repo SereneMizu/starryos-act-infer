@@ -60,3 +60,7 @@ makefile和脚本禁用sudo，假设权限充足，如需提权，使用sudo mak
 - `scripts/tpu_compile.py` — ONNX→cvimodel 编译
 - `scripts/build-sg2002-sdcard.sh` — SD 卡镜像拼装
 - `sg2002-libs/` — 静态库 `.a` + `libgcc_s.so.1`
+
+## 注意
+
+- git提交信息保持简洁，单行中文commit信息

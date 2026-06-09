@@ -3,6 +3,7 @@
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
         test-host test-qemu build-sg2002 sg2002-sdcard \
+        build-rk3588 rk3588-sdcard \
         collect-sg2002-libs
 
 PYTHON := .venv/bin/python
@@ -38,6 +39,8 @@ ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
 ROOTFS_APP   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
 SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
+RK3588_UIMG  := output/rk3588/starryos.uimg
+RK3588_BOARD := os/StarryOS/configs/board/orangepi-5-plus.toml
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
 all: export-onnx verify-onnx
@@ -114,12 +117,25 @@ test-qemu: docker-up $(MODEL_ONNX) $(ROOTFS_APP)
 	bash scripts/prepare-app-files.sh
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry app qemu -t act-infer --arch riscv64'
 
-# === Task 1: SG2002 (TPU) ===
+# === Task 1: RK3588 (OrangePi 5 Plus) ===
+
+$(RK3588_UIMG): docker-up
+	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry build --config $(RK3588_BOARD) --arch aarch64'
+	@mkdir -p output/rk3588
+	uimg_src=$$(find tgoskits/target/aarch64-unknown-linux-musl -name "*.uimg" 2>/dev/null | head -1); \
+		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
+
+build-rk3588: $(RK3588_UIMG)
+
+rk3588-sdcard: build-rk3588
+	bash scripts/build-rk3588-sdcard.sh
+
+# === Task 2: SG2002 (TPU) ===
 
 $(SG2002_UIMG): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry build --config $(SG2002_BOARD) --arch riscv64'
 	@mkdir -p output/sg2002
-	uimg_src=$$(find tgoskits/target -name "*.uimg" -newer tgoskits/Cargo.lock 2>/dev/null | head -1); \
+	uimg_src=$$(find tgoskits/target/riscv64-unknown-linux-musl -name "*.uimg" 2>/dev/null | head -1); \
 		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
 
 build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX) collect-sg2002-libs
@@ -152,4 +168,4 @@ clean:
 	rm -f $(STARRY_LINK)
 	rm -f starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx
 	rm -rf starry-apps/act-infer/frames act-infer-ort/target act-infer-tpu/target
-	rm -rf output/sg2002 output/tpu mnt
+	rm -rf output/sg2002 output/rk3588 output/tpu mnt
