@@ -98,11 +98,19 @@ cp "$REF_JSON" "$mnt$APP_DEST/reference.json" 2>/dev/null || true
 cp "$INFER_SH" "$mnt$APP_DEST/infer.sh"
 chmod +x "$mnt$APP_DEST/infer.sh"
 
-# --- C++ 运行时（libstdc++ 已静态链接，仅剩 libgcc_s 动态）---
+# --- 运行时动态库（从 starry-apps/act-infer-tpu/lib staging 收集）---
+
+STAGING="$proj/starry-apps/act-infer-tpu/lib"
 
 echo "[sg2002] installing runtime libs ..."
-cp "$proj/sg2002-libs/libgcc_s.so.1" "$mnt/lib/"
-ln -sf libgcc_s.so.1 "$mnt/lib/libgcc_s.so"
+for so in "$STAGING"/*.so*; do
+    [ -f "$so" ] || continue
+    base=$(basename "$so")
+    cp "$so" "$mnt/lib/$base"
+    echo "  $base"
+done
+ln -sf libgcc_s.so.1 "$mnt/lib/libgcc_s.so" 2>/dev/null || true
+ln -sf libstdc++.so.6 "$mnt/lib/libstdc++.so" 2>/dev/null || true
 
 # --- 卸载并生成最终镜像 ---
 

@@ -2,7 +2,8 @@
         export-onnx verify-onnx quantize quantize-int8 \
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
-        test-host test-qemu build-sg2002 sg2002-sdcard
+        test-host test-qemu build-sg2002 sg2002-sdcard \
+        collect-sg2002-libs
 
 PYTHON := .venv/bin/python
 
@@ -83,7 +84,7 @@ docker-up:
 	$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted -y
 
 docker-shell: docker-up
-	$(DOCKER_EXEC) -it bash
+	docker exec -it $(DOCKER_NAME) bash
 
 docker-down:
 	docker stop $(DOCKER_NAME) 2>/dev/null || true
@@ -94,7 +95,7 @@ tpu-up:
 	$(TPU_DOCKER_EXEC) pip install -q tpu_mlir
 
 tpu-shell: tpu-up
-	$(TPU_DOCKER_EXEC) -it bash
+	docker exec -it $(TPU_DOCKER_NAME) bash
 
 tpu-down:
 	docker stop $(TPU_DOCKER_NAME) 2>/dev/null || true
@@ -121,10 +122,13 @@ $(SG2002_UIMG): docker-up
 	uimg_src=$$(find tgoskits/target -name "*.uimg" -newer tgoskits/Cargo.lock 2>/dev/null | head -1); \
 		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
 
-build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
+build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX) collect-sg2002-libs
 	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16 --processor cv181x
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
+
+collect-sg2002-libs: docker-up
+	bash scripts/collect-sg2002-libs.sh
 
 sg2002-sdcard: build-sg2002 verify-onnx
 	sudo bash scripts/build-sg2002-sdcard.sh

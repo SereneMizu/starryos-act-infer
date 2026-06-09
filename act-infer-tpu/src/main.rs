@@ -12,14 +12,6 @@ use serde::Deserialize;
 
 use bindings::{CVI_FMT, CVI_MODEL_HANDLE, CVI_RC, CVI_TENSOR};
 
-macro_rules! ulog {
-    ($($arg:tt)*) => {{
-        let msg = format!($($arg)*);
-        let msg = msg + "\n";
-        unsafe { libc::write(libc::STDERR_FILENO, msg.as_ptr() as *const _, msg.len()); }
-    }};
-}
-
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
@@ -122,15 +114,11 @@ impl TpuModel {
         let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
             .map_err(|e| format!("invalid path: {e}"))?;
 
-        ulog!("[ffi] CVI_NN_RegisterModel({})", path.display());
         let mut handle: CVI_MODEL_HANDLE = ptr::null_mut();
         let rc: CVI_RC = unsafe { bindings::CVI_NN_RegisterModel(c_path.as_ptr(), &mut handle) };
-        ulog!("[ffi] CVI_NN_RegisterModel rc={}", rc);
         if rc != 0 {
             return Err(format!("CVI_NN_RegisterModel failed: rc={rc}"));
         }
-
-        ulog!("[ffi] CVI_NN_GetInputOutputTensors");
         let mut inputs: *mut CVI_TENSOR = ptr::null_mut();
         let mut input_num: i32 = 0;
         let mut outputs: *mut CVI_TENSOR = ptr::null_mut();
@@ -141,7 +129,6 @@ impl TpuModel {
                 handle, &mut inputs, &mut input_num, &mut outputs, &mut output_num,
             )
         };
-        ulog!("[ffi] CVI_NN_GetInputOutputTensors rc={}", rc);
         if rc != 0 {
             unsafe { bindings::CVI_NN_CleanupModel(handle) };
             return Err(format!("CVI_NN_GetInputOutputTensors failed: rc={rc}"));
@@ -228,7 +215,7 @@ fn load_reference(path: &Path) -> Vec<RefEntry> {
 
 struct FrameResult {
     frame: String,
-    infer_us: u128,
+    infer_ms: u128,
     left_vel: f32,
     right_vel: f32,
     turn: String,
@@ -254,10 +241,10 @@ fn read_bf16_from_tensor(ptr: *const u8, len: usize) -> Vec<f32> {
     out
 }
 
-fn read_mem_free_kb() -> u64 {
-    let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+fn read_self_vm_kb() -> u64 {
+    let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     for line in s.lines() {
-        if line.starts_with("MemFree:") {
+        if line.starts_with("VmSize:") {
             return line
                 .split_whitespace()
                 .nth(1)
@@ -269,48 +256,47 @@ fn read_mem_free_kb() -> u64 {
 }
 
 fn print_mem(tag: &str) {
+    let vm = read_self_vm_kb();
     let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let parts: Vec<&str> = s
+    let free: u64 = s
         .lines()
-        .filter(|l| {
-            l.starts_with("MemTotal:")
-                || l.starts_with("MemFree:")
-                || l.starts_with("MemAvailable:")
-        })
-        .collect();
-    println!("[mem] {tag}: {}", parts.join("  "));
+        .find(|l| l.starts_with("MemFree:"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(0);
+    println!("[mem] {tag}: VmSize={vm}kB  MemFree={free}kB");
 }
 
 struct MemTracker {
-    min_free: Arc<AtomicU64>,
+    peak_vm_kb: Arc<AtomicU64>,
 }
 
 impl MemTracker {
     fn new() -> Self {
-        let min_free = Arc::new(AtomicU64::new(u64::MAX));
-        let c = min_free.clone();
+        let peak_vm_kb = Arc::new(AtomicU64::new(0));
+        let c = peak_vm_kb.clone();
         std::thread::spawn(move || loop {
-            let free = read_mem_free_kb();
-            c.fetch_min(free, Ordering::Relaxed);
+            let vm = read_self_vm_kb();
+            let prev = c.load(Ordering::Relaxed);
+            if vm > prev {
+                c.store(vm, Ordering::Relaxed);
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         });
-        Self { min_free }
+        Self { peak_vm_kb }
     }
 
-    fn peak_used_mb(&self, total_kb: u64) -> u64 {
-        let min_free = self.min_free.load(Ordering::Relaxed);
-        (total_kb.saturating_sub(min_free)) / 1024
+    fn peak_mb(&self) -> u64 {
+        self.peak_vm_kb.load(Ordering::Relaxed) / 1024
     }
 }
 
 fn main() {
     let args = Args::parse();
-    ulog!("[boot] act-infer-tpu starting, model={}, dir={}", args.model.display(), args.dir.display());
 
     if args.track_mem {
         print_mem("startup");
     }
-    let total_kb = read_mem_free_kb();
     let tracker = if args.track_mem {
         Some(MemTracker::new())
     } else {
@@ -327,18 +313,12 @@ fn main() {
     let t = Instant::now();
     let model = TpuModel::load(&args.model).expect("failed to load cvimodel");
     let load_ms = t.elapsed().as_millis();
-    ulog!("[emerg] model loaded in {load_ms}ms, handle={:p}, inputs={:p}, outputs={:p}, in_num={}, out_num={}",
-        model.handle, model.inputs, model.outputs, model.input_num, model.output_num);
     println!("[tpu] model loaded in {load_ms}ms");
 
     let img_shape = model.input_shape(0);
-    ulog!("[emerg] input_shape(0) = {img_shape:?}");
     let state_shape = model.input_shape(1);
-    ulog!("[emerg] input_shape(1) = {state_shape:?}");
     let action_shape = model.output_shape(0);
-    ulog!("[emerg] output_shape(0) = {action_shape:?}");
     let output_fmt = model.output_fmt(0);
-    ulog!("[emerg] output_fmt(0) = {:?}", output_fmt);
     println!(
         "[tpu] input:{} images={:?} state={:?}  output:{} action={:?} fmt={:?}",
         model.input_num, img_shape, state_shape,
@@ -377,8 +357,8 @@ fn main() {
 
     for (i, frame_path) in frames.iter().enumerate() {
         let name = frame_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        ulog!("[dbg] [{}/{}] {}", i + 1, n, name);
 
+        let t_infer = Instant::now();
         let img_data = preprocess_image(frame_path);
         let img_tensor = build_images_tensor(&img_data);
 
@@ -390,9 +370,8 @@ fn main() {
             ptr::copy_nonoverlapping(normalized_state.as_ptr(), inp1, normalized_state.len());
         }
 
-        let t_infer = Instant::now();
         model.run().expect("CVI_NN_Forward failed");
-        let infer_us = t_infer.elapsed().as_micros();
+        let infer_ms = t_infer.elapsed().as_millis();
 
         let out0 = model.output_ptr(0) as *const u8;
         let raw = match output_fmt {
@@ -420,12 +399,12 @@ fn main() {
 
         if let Some(r) = ref_info {
             println!(
-                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5} ref={ref_turn:<5} [{match_tag}]",
+                "[{name}] infer={infer_ms}ms  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5} ref={ref_turn:<5} [{match_tag}]",
                 ref_turn = r.turn,
             );
         } else {
             println!(
-                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5}"
+                "[{name}] infer={infer_ms}ms  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5}"
             );
         }
 
@@ -435,7 +414,7 @@ fn main() {
 
         results.push(FrameResult {
             frame: name,
-            infer_us,
+            infer_ms,
             left_vel,
             right_vel,
             turn: turn.to_string(),
@@ -446,7 +425,7 @@ fn main() {
         print_mem("after all frames");
     }
 
-    print_summary(n, &results, tracker.as_ref().map(|t| t.peak_used_mb(total_kb)), reference.as_deref());
+    print_summary(n, &results, tracker.as_ref().map(|t| t.peak_mb()), reference.as_deref());
 }
 
 fn print_summary(
@@ -455,7 +434,7 @@ fn print_summary(
     peak_mb: Option<u64>,
     reference: Option<&[RefEntry]>,
 ) {
-    let times: Vec<u128> = results.iter().map(|r| r.infer_us).collect();
+    let times: Vec<u128> = results.iter().map(|r| r.infer_ms).collect();
     let sum: u128 = times.iter().sum();
     let avg = sum as f64 / n as f64;
     let min = times.iter().min().unwrap();
@@ -464,7 +443,7 @@ fn print_summary(
     println!("\n===== SUMMARY =====");
     println!("frames:      {n}");
     println!(
-        "infer total: {:.2}ms  avg: {:.1}us  min: {min}us  max: {max}us",
+        "infer total: {:.2}s  avg: {:.1}ms  min: {min}ms  max: {max}ms",
         sum as f64 / 1000.0,
         avg,
     );

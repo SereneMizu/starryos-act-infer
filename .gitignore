@@ -19,6 +19,7 @@ tgoskits/tmp/
 starry-apps/act-infer/act-infer-ort
 starry-apps/act-infer/model.onnx
 starry-apps/act-infer/frames/
+starry-apps/act-infer-tpu/lib/*.so*
 
 # IDE
 .idea/

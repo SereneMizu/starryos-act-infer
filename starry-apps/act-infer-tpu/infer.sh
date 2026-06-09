@@ -10,6 +10,7 @@ echo "=== ACT TPU Inference ==="
 echo "model:  $MODEL"
 echo "frames: $DIR"
 echo "stats:  $STATS"
+echo "ref:    $REF ($(if [ -f "$REF" ]; then echo "exists"; else echo "missing"; fi))"
 
 if [ -f "$REF" ]; then
     exec act-infer-tpu \
