@@ -133,7 +133,7 @@ $(RK3588_UIMG): docker-up
 build-rk3588: $(RK3588_UIMG)
 
 rk3588-sdcard: build-rk3588 $(ROOTFS_RK3588)
-	bash scripts/build-rk3588-sdcard.sh $(ROOTFS_RK3588)
+	sudo bash scripts/build-rk3588-sdcard.sh $(ROOTFS_RK3588)
 
 # === Task 1: SG2002 (TPU) ===
 
@@ -158,7 +158,7 @@ $(OFFICIAL_IMG):
 		cp "$$(find $$tmp -name '*.img' | head -1)" $@ && rm -rf "$$tmp")
 
 collect-sg2002-libs: docker-up $(OFFICIAL_IMG)
-	bash scripts/collect-sg2002-libs.sh
+	sudo bash scripts/collect-sg2002-libs.sh
 
 # === Misc tools (static, cross) ===
 
@@ -166,7 +166,7 @@ build-lrzsz: docker-up
 	$(DOCKER_EXEC) bash scripts/build-lrzsz.sh
 
 sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
-	bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE)
+	sudo bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE)
 
 # === Rootfs ===
 

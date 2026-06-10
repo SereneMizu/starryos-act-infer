@@ -1,6 +1,6 @@
 tgoskits是上游代码，应当避免修改（当前已在dev分支上有局部patch，见下方）
 
-makefile和脚本禁用sudo，假设权限充足，如需提权，使用sudo make
+脚本内部禁用sudo，由Makefile在调用处加sudo提权（sg2002-sdcard、rk3588-sdcard、collect-sg2002-libs）
 
 ## 构建命令
 
