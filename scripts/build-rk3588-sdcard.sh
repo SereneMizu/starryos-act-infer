@@ -1,34 +1,32 @@
 #!/usr/bin/env bash
 # 构建 RK3588 (OrangePi 5 Plus) SD 卡镜像
-# 布局：0~16MB Rockchip 引导链(rk3588-bootchain.img), 16MB起 GPT rootfs(tgoskits Debian rootfs + StarryOS)
-# 用法: $0 <rootfs.img>  （tgoskits 管理的 ext4 rootfs 镜像）
+# 布局：0~16MB Rockchip 引导链(sdboot/rk3588-boot.img), 16MB起 GPT rootfs(tgoskits Debian rootfs + StarryOS)
+# 用法: $0 <rootfs.img> <boot.img>  （tgoskits ext4 rootfs + sdboot/rk3588-boot.img）
 set -euo pipefail
 
 proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/rk3588"
 mnt="$proj/mnt/rk3588_rootfs"
 
-ROOTFS_IMG="${1:?Usage: $0 <rootfs.img>}"
-BOOTCHAIN="$out/rk3588-bootchain.img"
+ROOTFS_IMG="${1:?Usage: $0 <rootfs.img> <boot.img>}"
+BOOTCHAIN="${2:?Usage: $0 <rootfs.img> <boot.img>}"
 
 [[ -f "$ROOTFS_IMG" ]] || { echo "[rk3588] rootfs not found: $ROOTFS_IMG"; exit 1; }
-[[ -f "$BOOTCHAIN" ]] || { echo "[rk3588] bootchain not found: $BOOTCHAIN"; echo "  run 'dd if=<armbian.img> of=$BOOTCHAIN bs=512 count=32768' first"; exit 1; }
+[[ -f "$BOOTCHAIN" ]] || { echo "[rk3588] boot not found: $BOOTCHAIN"; exit 1; }
 mkdir -p "$out"
 
 sdcard="$out/rk3588-sdcard.img"
 loop_file="$out/.loop_dev"
 
-# --- 创建 1GB SD 卡镜像 ---
+# --- 创建 2GB SD 卡镜像 ---
 
 rm -f "$sdcard"
-fallocate -l 1073741824 "$sdcard"
+fallocate -l 2147483648 "$sdcard"
 
 # GPT 分区表：p1 从扇区 32768 开始（与 Armbian 布局一致）
 printf "label: gpt\nstart=32768, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4\n" | sfdisk "$sdcard" > /dev/null
 
 # 写入 Rockchip 引导链，跳过 GPT 头（扇区 0~33）避免覆盖分区表
-# 扇区 0: Protective MBR, 扇区 1~33: GPT header + partition entries
-# 扇区 34~32767: SPL/ATF/U-Boot 等引导数据
 dd if="$BOOTCHAIN" of="$sdcard" bs=512 skip=34 seek=34 count=$((32768 - 34)) conv=notrunc status=none
 
 LOOP=$(losetup --find --show --partscan "$sdcard")

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # 构建 SG2002 (LicheeRV-Nano) SD 卡镜像
-# 包含：boot 分区（官方 u-boot）+ rootfs 分区（tgoskits Alpine rootfs + StarryOS 内核 + TPU 推理应用）
-# 用法: $0 <rootfs.img>  （tgoskits 管理的 ext4 rootfs 镜像）
+# 包含：boot 分区（u-boot）+ rootfs 分区（tgoskits Alpine rootfs + StarryOS 内核 + TPU 推理应用）
+# 用法: $0 <rootfs.img> <boot.img>  （tgoskits ext4 rootfs + sdboot/sg2002-boot.img）
 set -euo pipefail
 
 proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/sg2002"
 mnt="$proj/mnt/sg2002_rootfs"
 
-ROOTFS_IMG="${1:?Usage: $0 <rootfs.img>}"
-OFFICIAL_IMG_URL="https://github.com/sipeed/LicheeRV-Nano-Build/releases/download/20260114/2026-01-14-16-03-d4003f.tar.xz"
+ROOTFS_IMG="${1:?Usage: $0 <rootfs.img> <boot.img>}"
+BOOT_IMG="${2:?Usage: $0 <rootfs.img> <boot.img>}"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
 TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
@@ -20,23 +20,11 @@ INFER_SH="$proj/starry-apps/act-infer-tpu/infer.sh"
 APP_DEST="/opt/act-infer"
 
 [[ -f "$ROOTFS_IMG" ]] || { echo "[sg2002] rootfs not found: $ROOTFS_IMG"; exit 1; }
+[[ -f "$BOOT_IMG" ]] || { echo "[sg2002] boot not found: $BOOT_IMG"; exit 1; }
 mkdir -p "$out"
 
-official_tar="$out/official-img.tar.xz"
-official_img="$out/official.img"
 sdcard="$out/sg2002-sdcard.img"
 loop_file="$out/.loop_dev"
-
-# --- 下载官方镜像（含 u-boot）---
-
-if [[ ! -f "$official_img" ]]; then
-    [[ -f "$official_tar" ]] || { echo "[sg2002] downloading official image ..."; curl -fSL -o "$official_tar" "$OFFICIAL_IMG_URL"; }
-    echo "[sg2002] extracting ..."
-    tmp=$(mktemp -d)
-    tar -xf "$official_tar" -C "$tmp"
-    cp "$(find "$tmp" -name "*.img" | head -1)" "$official_img"
-    rm -rf "$tmp"
-fi
 
 # --- 创建 2GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
 
@@ -65,7 +53,7 @@ ROOT="${LOOP}p2"
 
 # --- 写入 boot 分区 ---
 
-dd if="$official_img" bs=512 skip=1 count=32768 of="$BOOT" status=none
+dd if="$BOOT_IMG" of="$BOOT" bs=512 status=none
 
 # --- 写入 tgoskits rootfs（ext4 镜像直接 dd，然后扩展分区）---
 
@@ -117,6 +105,5 @@ rmdir "$mnt" 2>/dev/null || true
 trap - EXIT
 losetup -d "$LOOP" 2>/dev/null || true
 rm -f "$loop_file"
-
 
 echo "[sg2002] done: $sdcard ($(stat -c%s "$sdcard" | numfmt --to=iec))"
