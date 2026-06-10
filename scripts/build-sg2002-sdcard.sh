@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # 构建 SG2002 (LicheeRV-Nano) SD 卡镜像
-# 包含：boot 分区（官方 u-boot）+ rootfs 分区（Alpine + StarryOS 内核 + TPU 推理应用）
+# 包含：boot 分区（官方 u-boot）+ rootfs 分区（tgoskits Alpine rootfs + StarryOS 内核 + TPU 推理应用）
+# 用法: $0 <rootfs.img>  （tgoskits 管理的 ext4 rootfs 镜像）
 set -euo pipefail
 
 proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/sg2002"
 mnt="$proj/mnt/sg2002_rootfs"
 
-BOARD_CONFIG="os/StarryOS/configs/board/licheerv-nano-sg2002.toml"
+ROOTFS_IMG="${1:?Usage: $0 <rootfs.img>}"
 OFFICIAL_IMG_URL="https://github.com/sipeed/LicheeRV-Nano-Build/releases/download/20260114/2026-01-14-16-03-d4003f.tar.xz"
-ALPINE_ROOTFS_URL="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/releases/riscv64/alpine-minirootfs-3.23.4-riscv64.tar.gz"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
 TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
@@ -19,11 +19,11 @@ REF_JSON="$proj/output/infer_results_onnx.json"
 INFER_SH="$proj/starry-apps/act-infer-tpu/infer.sh"
 APP_DEST="/opt/act-infer"
 
+[[ -f "$ROOTFS_IMG" ]] || { echo "[sg2002] rootfs not found: $ROOTFS_IMG"; exit 1; }
 mkdir -p "$out"
 
 official_tar="$out/official-img.tar.xz"
 official_img="$out/official.img"
-alpine_tar="$out/alpine-minirootfs-3.23.4-riscv64.tar.gz"
 sdcard="$out/sg2002-sdcard.img"
 loop_file="$out/.loop_dev"
 
@@ -37,10 +37,6 @@ if [[ ! -f "$official_img" ]]; then
     cp "$(find "$tmp" -name "*.img" | head -1)" "$official_img"
     rm -rf "$tmp"
 fi
-
-# --- 下载 Alpine rootfs ---
-
-[[ -f "$alpine_tar" ]] || { echo "[sg2002] downloading alpine rootfs ..."; curl -fSL -o "$alpine_tar" "$ALPINE_ROOTFS_URL"; }
 
 # --- 创建 1GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
 
@@ -71,12 +67,14 @@ ROOT="${LOOP}p2"
 
 dd if="$official_img" bs=512 skip=1 count=32768 of="$BOOT" status=none
 
-# --- 创建 rootfs 分区 ---
+# --- 写入 tgoskits rootfs（ext4 镜像直接 dd，然后扩展分区）---
 
-mkfs.ext4 -F -L rootfs "$ROOT" > /dev/null
+echo "[sg2002] writing rootfs ..."
+dd if="$ROOTFS_IMG" of="$ROOT" bs=4M status=none
+e2fsck -f -y "$ROOT" >/dev/null 2>&1 || true
+resize2fs "$ROOT" >/dev/null
 mkdir -p "$mnt"
 mount "$ROOT" "$mnt"
-tar -xzf "$alpine_tar" -C "$mnt"
 
 # --- StarryOS 内核（由 Makefile 预构建到 output/sg2002/starryos.uimg）---
 

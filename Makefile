@@ -37,6 +37,8 @@ RESULT_INT8  := output/infer_results_int8.json
 IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
 ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
 ROOTFS_APP   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
+ROOTFS_RK3588 := tgoskits/tmp/axbuild/rootfs/rootfs-aarch64-debian.img
+TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/v0.0.5
 SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
@@ -82,9 +84,11 @@ quantize-int8: $(RESULT_ONNX) $(RESULT_INT8)
 # === Containers ===
 
 docker-up:
-	docker start $(DOCKER_NAME) 2>/dev/null || docker run -d --name $(DOCKER_NAME) --privileged -v "$$(pwd)":/workspace -w /workspace $(DOCKER_IMAGE) sleep infinity
-	$(DOCKER_EXEC) apt-get update
-	$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted -y
+	@if ! docker start $(DOCKER_NAME) 2>/dev/null; then \
+		docker run -d --name $(DOCKER_NAME) --privileged -v "$$(pwd)":/workspace -w /workspace $(DOCKER_IMAGE) sleep infinity; \
+		$(DOCKER_EXEC) apt-get update; \
+		$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted -y; \
+	fi
 
 docker-shell: docker-up
 	docker exec -it $(DOCKER_NAME) bash
@@ -94,9 +98,10 @@ docker-down:
 	docker rm $(DOCKER_NAME) 2>/dev/null || true
 
 tpu-up:
-	docker start $(TPU_DOCKER_NAME) 2>/dev/null || docker run -d --privileged --name $(TPU_DOCKER_NAME) -v "$$(pwd)":/workspace -w /workspace $(TPU_IMAGE) sleep infinity
-	$(TPU_DOCKER_EXEC) pip install -q tpu_mlir
-
+	@if ! docker start $(TPU_DOCKER_NAME) 2>/dev/null; then \
+		docker run -d --privileged --name $(TPU_DOCKER_NAME) -v "$$(pwd)":/workspace -w /workspace $(TPU_IMAGE) sleep infinity; \
+		$(TPU_DOCKER_EXEC) pip install -q tpu_mlir; \
+	fi
 tpu-shell: tpu-up
 	docker exec -it $(TPU_DOCKER_NAME) bash
 
@@ -117,7 +122,7 @@ test-qemu: docker-up $(MODEL_ONNX) $(ROOTFS_APP)
 	bash scripts/prepare-app-files.sh
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry app qemu -t act-infer --arch riscv64'
 
-# === Task 1: RK3588 (OrangePi 5 Plus) ===
+# === Task 2: RK3588 (OrangePi 5 Plus) ===
 
 $(RK3588_UIMG): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry build --config $(RK3588_BOARD) --arch aarch64'
@@ -127,10 +132,10 @@ $(RK3588_UIMG): docker-up
 
 build-rk3588: $(RK3588_UIMG)
 
-rk3588-sdcard: build-rk3588
-	bash scripts/build-rk3588-sdcard.sh
+rk3588-sdcard: build-rk3588 $(ROOTFS_RK3588)
+	bash scripts/build-rk3588-sdcard.sh $(ROOTFS_RK3588)
 
-# === Task 2: SG2002 (TPU) ===
+# === Task 1: SG2002 (TPU) ===
 
 $(SG2002_UIMG): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry build --config $(SG2002_BOARD) --arch riscv64'
@@ -151,13 +156,17 @@ collect-sg2002-libs: docker-up
 build-lrzsz: docker-up
 	$(DOCKER_EXEC) bash scripts/build-lrzsz.sh
 
-sg2002-sdcard: build-sg2002 verify-onnx
-	sudo bash scripts/build-sg2002-sdcard.sh
+sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
+	sudo bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE)
 
 # === Rootfs ===
 
 $(ROOTFS_BASE): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry rootfs --arch riscv64'
+
+$(ROOTFS_RK3588):
+	@mkdir -p tgoskits/tmp/axbuild/rootfs
+	[ -f $@ ] || (curl -fSL $(TGOSIMAGES)/rootfs-aarch64-debian.img.tar.xz | tar xJ -C tgoskits/tmp/axbuild/rootfs)
 
 $(ROOTFS_APP): $(ROOTFS_BASE)
 	cp $(ROOTFS_BASE) $(ROOTFS_APP)

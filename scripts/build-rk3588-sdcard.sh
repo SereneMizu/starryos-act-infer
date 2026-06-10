@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
 # 构建 RK3588 (OrangePi 5 Plus) SD 卡镜像
-# 布局：0~16MB Rockchip 引导链(rk3588-bootchain.img), 16MB起 GPT rootfs(Alpine + StarryOS)
+# 布局：0~16MB Rockchip 引导链(rk3588-bootchain.img), 16MB起 GPT rootfs(tgoskits Debian rootfs + StarryOS)
+# 用法: $0 <rootfs.img>  （tgoskits 管理的 ext4 rootfs 镜像）
 set -euo pipefail
 
 proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/rk3588"
 mnt="$proj/mnt/rk3588_rootfs"
 
+ROOTFS_IMG="${1:?Usage: $0 <rootfs.img>}"
 BOOTCHAIN="$out/rk3588-bootchain.img"
-ALPINE_ROOTFS_URL="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/releases/aarch64/alpine-minirootfs-3.23.4-aarch64.tar.gz"
 
+[[ -f "$ROOTFS_IMG" ]] || { echo "[rk3588] rootfs not found: $ROOTFS_IMG"; exit 1; }
+[[ -f "$BOOTCHAIN" ]] || { echo "[rk3588] bootchain not found: $BOOTCHAIN"; echo "  run 'dd if=<armbian.img> of=$BOOTCHAIN bs=512 count=32768' first"; exit 1; }
 mkdir -p "$out"
 
-alpine_tar="$out/alpine-minirootfs-3.23.4-aarch64.tar.gz"
 sdcard="$out/rk3588-sdcard.img"
 loop_file="$out/.loop_dev"
-
-if [[ ! -f "$BOOTCHAIN" ]]; then
-    echo "[rk3588] bootchain not found: $BOOTCHAIN"
-    echo "[rk3588] run 'dd if=<armbian.img> of=$BOOTCHAIN bs=512 count=32768' first"
-    exit 1
-fi
-
-# --- 下载 Alpine rootfs ---
-
-[[ -f "$alpine_tar" ]] || { echo "[rk3588] downloading alpine rootfs ..."; curl -fSL -o "$alpine_tar" "$ALPINE_ROOTFS_URL"; }
 
 # --- 创建 1GB SD 卡镜像 ---
 
@@ -58,12 +50,14 @@ fi
 
 ROOT="${LOOP}p1"
 
-# --- 格式化 rootfs 并安装 Alpine ---
+# --- 写入 tgoskits rootfs（ext4 镜像直接 dd，然后扩展分区）---
 
-mkfs.ext4 -F -L rootfs "$ROOT" > /dev/null
+echo "[rk3588] writing rootfs ..."
+dd if="$ROOTFS_IMG" of="$ROOT" bs=4M status=none
+e2fsck -f -y "$ROOT" >/dev/null 2>&1 || true
+resize2fs "$ROOT" >/dev/null
 mkdir -p "$mnt"
 mount "$ROOT" "$mnt"
-tar -xzf "$alpine_tar" -C "$mnt"
 
 # --- StarryOS 内核 ---
 
