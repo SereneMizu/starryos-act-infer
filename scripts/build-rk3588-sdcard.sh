@@ -21,7 +21,7 @@ loop_file="$out/.loop_dev"
 # --- 创建 2GB SD 卡镜像 ---
 
 rm -f "$sdcard"
-fallocate -l 2147483648 "$sdcard"
+fallocate -l 2G "$sdcard"
 
 # GPT 分区表：p1 从扇区 32768 开始（与 Armbian 布局一致）
 printf "label: gpt\nstart=32768, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4\n" | sfdisk "$sdcard" > /dev/null

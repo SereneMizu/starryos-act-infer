@@ -38,7 +38,7 @@ IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
 ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
 ROOTFS_APP   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
 ROOTFS_RK3588 := tgoskits/tmp/axbuild/rootfs/rootfs-aarch64-debian.img
-TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/v0.0.5
+TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/latest
 SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
@@ -190,5 +190,5 @@ clean:
 	rm -rf starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx starry-apps/act-infer/frames
 	sudo rm -rf act-infer-ort/target act-infer-tpu/target
 	sudo rm -rf output/sg2002 output/rk3588 output/tpu output/lrzsz output/infer_results_*.json mnt
-	rm -rf tgoskits/target tgoskits/tmp
-	rm -rf third_party
+	sudo rm -rf tgoskits/target tgoskits/tmp
+	sudo rm -rf third_party
