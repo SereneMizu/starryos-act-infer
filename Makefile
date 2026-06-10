@@ -4,7 +4,7 @@
         tpu-up tpu-down tpu-shell \
         test-host test-qemu build-sg2002 sg2002-sdcard \
         build-rk3588 rk3588-sdcard \
-        collect-sg2002-libs
+        collect-sg2002-libs build-lrzsz
 
 PYTHON := .venv/bin/python
 
@@ -145,6 +145,11 @@ build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX) collect-sg2002-libs
 
 collect-sg2002-libs: docker-up
 	bash scripts/collect-sg2002-libs.sh
+
+# === Misc tools (static, cross) ===
+
+build-lrzsz: docker-up
+	$(DOCKER_EXEC) bash scripts/build-lrzsz.sh
 
 sg2002-sdcard: build-sg2002 verify-onnx
 	sudo bash scripts/build-sg2002-sdcard.sh

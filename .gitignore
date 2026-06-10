@@ -15,6 +15,9 @@ output/
 # tgoskits build artifacts
 tgoskits/tmp/
 
+# Third-party sources & builds (downloaded/built by scripts/build-lrzsz.sh etc.)
+third_party/
+
 # Starry app build artifacts
 starry-apps/act-infer/act-infer-ort
 starry-apps/act-infer/model.onnx
