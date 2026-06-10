@@ -140,15 +140,24 @@ rk3588-sdcard: build-rk3588 $(ROOTFS_RK3588)
 $(SG2002_UIMG): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry build --config $(SG2002_BOARD) --arch riscv64'
 	@mkdir -p output/sg2002
-	uimg_src=$$(find tgoskits/target/riscv64-unknown-linux-musl -name "*.uimg" 2>/dev/null | head -1); \
+	uimg_src=$$(find tgoskits/target/riscv64gc-unknown-linux-musl -name "*.uimg" 2>/dev/null | head -1); \
 		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
 
 build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX) collect-sg2002-libs
 	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16 --processor cv181x
-	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
+	$(DOCKER_EXEC) bash -c 'rustup default stable 2>/dev/null; rustup target add $(TARGET) 2>/dev/null; cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
 
-collect-sg2002-libs: docker-up
+OFFICIAL_IMG := output/sg2002/official.img
+OFFICIAL_TAR_XZ := https://github.com/sipeed/LicheeRV-Nano-Build/releases/download/20260114/2026-01-14-16-03-d4003f.tar.xz
+
+$(OFFICIAL_IMG):
+	@mkdir -p output/sg2002
+	[ -f $@ ] || (curl -fSL -o output/sg2002/official-img.tar.xz "$(OFFICIAL_TAR_XZ)" && \
+		tmp=$$(mktemp -d) && tar -xf output/sg2002/official-img.tar.xz -C "$$tmp" && \
+		cp "$$(find $$tmp -name '*.img' | head -1)" $@ && rm -rf "$$tmp")
+
+collect-sg2002-libs: docker-up $(OFFICIAL_IMG)
 	bash scripts/collect-sg2002-libs.sh
 
 # === Misc tools (static, cross) ===
@@ -157,7 +166,7 @@ build-lrzsz: docker-up
 	$(DOCKER_EXEC) bash scripts/build-lrzsz.sh
 
 sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
-	sudo bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE)
+	bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE)
 
 # === Rootfs ===
 

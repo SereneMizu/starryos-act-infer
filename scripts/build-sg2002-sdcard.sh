@@ -38,10 +38,10 @@ if [[ ! -f "$official_img" ]]; then
     rm -rf "$tmp"
 fi
 
-# --- 创建 1GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
+# --- 创建 2GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
 
 rm -f "$sdcard"
-fallocate -l 1073741824 "$sdcard"
+fallocate -l 2147483648 "$sdcard"
 printf "start=1, size=32768, type=c, bootable\nstart=32769, type=83\n" | sfdisk "$sdcard" > /dev/null
 
 LOOP=$(losetup --find --show --partscan "$sdcard")
