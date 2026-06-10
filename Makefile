@@ -38,7 +38,7 @@ IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
 ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
 ROOTFS_APP   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
 ROOTFS_RK3588 := tgoskits/tmp/axbuild/rootfs/rootfs-aarch64-debian.img
-TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/latest
+TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/v0.0.7
 SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
@@ -100,8 +100,9 @@ docker-down:
 tpu-up:
 	@if ! docker start $(TPU_DOCKER_NAME) 2>/dev/null; then \
 		docker run -d --privileged --name $(TPU_DOCKER_NAME) -v "$$(pwd)":/workspace -w /workspace $(TPU_IMAGE) sleep infinity; \
-		$(TPU_DOCKER_EXEC) pip install -q tpu_mlir; \
 	fi
+	$(TPU_DOCKER_EXEC) pip install tpu_mlir; \
+
 tpu-shell: tpu-up
 	docker exec -it $(TPU_DOCKER_NAME) bash
 
@@ -133,7 +134,7 @@ $(RK3588_UIMG): docker-up
 build-rk3588: $(RK3588_UIMG)
 
 rk3588-sdcard: build-rk3588 $(ROOTFS_RK3588)
-	sudo bash scripts/build-rk3588-sdcard.sh $(ROOTFS_RK3588) $(RK3588_BOOT)
+	sudo bash scripts/build-rk3588-sdcard.sh
 
 # === Task 1: SG2002 (TPU) ===
 
@@ -166,7 +167,7 @@ build-lrzsz: docker-up
 	$(DOCKER_EXEC) bash scripts/build-lrzsz.sh
 
 sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
-	sudo bash scripts/build-sg2002-sdcard.sh $(ROOTFS_BASE) $(SG2002_BOOT)
+	sudo bash scripts/build-sg2002-sdcard.sh
 
 # === Rootfs ===
 

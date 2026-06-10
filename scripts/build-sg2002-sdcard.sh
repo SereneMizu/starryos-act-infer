@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# 构建 SG2002 (LicheeRV-Nano) SD 卡镜像
-# 包含：boot 分区（u-boot）+ rootfs 分区（tgoskits Alpine rootfs + StarryOS 内核 + TPU 推理应用）
-# 用法: $0 <rootfs.img> <boot.img>  （tgoskits ext4 rootfs + sdboot/sg2002-boot.img）
 set -euo pipefail
 
 proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/sg2002"
 mnt="$proj/mnt/sg2002_rootfs"
 
-ROOTFS_IMG="${1:?Usage: $0 <rootfs.img> <boot.img>}"
-BOOT_IMG="${2:?Usage: $0 <rootfs.img> <boot.img>}"
+ROOTFS_IMG="$proj/tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img"
+BOOT_IMG="$proj/sdboot/sg2002-boot.img"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
 TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
@@ -25,8 +22,6 @@ mkdir -p "$out"
 
 sdcard="$out/sg2002-sdcard.img"
 loop_file="$out/.loop_dev"
-
-# --- 创建 2GB SD 卡镜像：p1=boot(16MB), p2=rootfs ---
 
 rm -f "$sdcard"
 fallocate -l 2G "$sdcard"
@@ -51,11 +46,7 @@ fi
 BOOT="${LOOP}p1"
 ROOT="${LOOP}p2"
 
-# --- 写入 boot 分区 ---
-
 dd if="$BOOT_IMG" of="$BOOT" bs=512 status=none
-
-# --- 写入 tgoskits rootfs（ext4 镜像直接 dd，然后扩展分区）---
 
 echo "[sg2002] writing rootfs ..."
 dd if="$ROOTFS_IMG" of="$ROOT" bs=4M status=none
@@ -64,13 +55,9 @@ resize2fs "$ROOT" >/dev/null
 mkdir -p "$mnt"
 mount "$ROOT" "$mnt"
 
-# --- StarryOS 内核（由 Makefile 预构建到 output/sg2002/starryos.uimg）---
-
 echo "[sg2002] installing kernel ..."
 cp "$out/starryos.uimg" "$mnt/starryos.uimg"
 cp "$out/workspace_sg2002.uimg" "$mnt/workspace_sg2002.uimg" 2>/dev/null || true
-
-# --- 安装 TPU 推理应用 ---
 
 echo "[sg2002] installing app ..."
 mkdir -p "$mnt/usr/bin" "$mnt$APP_DEST"
@@ -84,8 +71,6 @@ cp "$REF_JSON" "$mnt$APP_DEST/reference.json" 2>/dev/null || true
 cp "$INFER_SH" "$mnt$APP_DEST/infer.sh"
 chmod +x "$mnt$APP_DEST/infer.sh"
 
-# --- 运行时动态库（从 starry-apps/act-infer-tpu/lib staging 收集）---
-
 STAGING="$proj/starry-apps/act-infer-tpu/lib"
 
 echo "[sg2002] installing runtime libs ..."
@@ -97,8 +82,6 @@ for so in "$STAGING"/*.so*; do
 done
 ln -sf libgcc_s.so.1 "$mnt/lib/libgcc_s.so" 2>/dev/null || true
 ln -sf libstdc++.so.6 "$mnt/lib/libstdc++.so" 2>/dev/null || true
-
-# --- 卸载并生成最终镜像 ---
 
 umount "$mnt"
 rmdir "$mnt" 2>/dev/null || true
