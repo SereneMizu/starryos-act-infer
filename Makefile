@@ -149,7 +149,16 @@ build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
 
 SG2002_BOOT := sdboot/sg2002-boot.img
-RK3588_BOOT := sdboot/rk3588-boot.img $(SG2002_BOOT)
+RK3588_BOOT := sdboot/rk3588-boot.img
+# sdboot/sg2002-boot.img: 从 Sipeed LicheeRV-Nano 官方镜像 p1 分区提取
+#   源: https://github.com/sipeed/LicheeRV-Nano-Build/releases/download/20260114/2026-01-14-16-03-d4003f.tar.xz
+#   提取: dd if=<official.img> of=sdboot/sg2002-boot.img bs=512 skip=1 count=32768
+# sdboot/rk3588-boot.img: 从 Armbian OrangePi 5 Plus 镜像前 16MB 提取（Rockchip SPL/ATF/U-Boot）
+#   源: Armbian_26.5.1_Orangepi5-plus_trixie_current_6.18.33_minimal.img
+#   提取: dd if=<armbian.img> of=sdboot/rk3588-boot.img bs=512 count=32768
+# starry-apps/act-infer-tpu/lib/:
+#   libcviruntime.so, libcvikernel.so, libcvimath.so: 从 Sipeed 官方镜像 rootfs /usr/bin/lib/ 提取
+#   libgcc_s.so.1, libstdc++.so.6: 从 tgoskits 容器 /opt/riscv64-linux-musl-cross/riscv64-linux-musl/lib/ 提取
 
 # === Misc tools (static, cross) ===
 
