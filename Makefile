@@ -35,9 +35,9 @@ RESULT_ONNX  := output/infer_results_onnx.json
 RESULT_FP16  := output/infer_results_fp16.json
 RESULT_INT8  := output/infer_results_int8.json
 IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
-ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img
-ROOTFS_APP   := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-act-infer.img
-ROOTFS_RK3588 := tgoskits/tmp/axbuild/rootfs/rootfs-aarch64-debian.img
+ROOTFS_BASE  := /tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img
+ROOTFS_APP   := /tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-act-infer.img
+ROOTFS_RK3588 := /tmp/.tgos-images/rootfs-aarch64-debian.img/rootfs-aarch64-debian.img
 TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/v0.0.7
 SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
@@ -173,10 +173,12 @@ sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
 
 $(ROOTFS_BASE): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry rootfs --arch riscv64'
+	@mkdir -p /tmp/.tgos-images/rootfs-riscv64-alpine.img
+	docker cp $(DOCKER_NAME):/tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img $(ROOTFS_BASE)
 
 $(ROOTFS_RK3588):
-	@mkdir -p tgoskits/tmp/axbuild/rootfs
-	[ -f $@ ] || (curl -fSL $(TGOSIMAGES)/rootfs-aarch64-debian.img.tar.xz | tar xJ -C tgoskits/tmp/axbuild/rootfs)
+	@mkdir -p /tmp/.tgos-images/rootfs-aarch64-debian.img
+	[ -f $@ ] || (curl -fSL $(TGOSIMAGES)/rootfs-aarch64-debian.img.tar.xz | tar xJ -C /tmp/.tgos-images/rootfs-aarch64-debian.img)
 
 $(ROOTFS_APP): $(ROOTFS_BASE)
 	cp $(ROOTFS_BASE) $(ROOTFS_APP)
@@ -191,5 +193,5 @@ clean:
 	rm -rf starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx starry-apps/act-infer/frames
 	sudo rm -rf act-infer-ort/target act-infer-tpu/target
 	sudo rm -rf output/sg2002 output/rk3588 output/tpu output/lrzsz output/infer_results_*.json mnt
-	sudo rm -rf tgoskits/target tgoskits/tmp
+	sudo rm -rf tgoskits/target tgoskits/tmp /tmp/.tgos-images
 	sudo rm -rf third_party

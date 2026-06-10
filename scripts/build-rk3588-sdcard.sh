@@ -5,7 +5,7 @@ proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/rk3588"
 mnt="$proj/mnt/rk3588_rootfs"
 
-ROOTFS_IMG="$proj/tgoskits/tmp/axbuild/rootfs/rootfs-aarch64-debian.img"
+ROOTFS_IMG="/tmp/.tgos-images/rootfs-aarch64-debian.img/rootfs-aarch64-debian.img"
 BOOTCHAIN="$proj/sdboot/rk3588-boot.img"
 DTB="$proj/sdboot/rk3588-orangepi-5-plus.dtb"
 
@@ -54,8 +54,7 @@ cp "$out/starryos.uimg" "$mnt/starryos.uimg"
 
 if [[ -f "$DTB" ]]; then
     echo "[rk3588] installing dtb ..."
-    mkdir -p "$mnt/boot/dtb/rockchip"
-    cp "$DTB" "$mnt/boot/dtb/rockchip/$(basename "$DTB")"
+    cp "$DTB" "$mnt/$(basename "$DTB")"
 fi
 
 umount "$mnt"
