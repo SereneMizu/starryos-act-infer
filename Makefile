@@ -186,9 +186,9 @@ $(ROOTFS_APP): $(ROOTFS_BASE)
 clean:
 	docker stop $(DOCKER_NAME) $(TPU_DOCKER_NAME) 2>/dev/null || true
 	docker rm $(DOCKER_NAME) $(TPU_DOCKER_NAME) 2>/dev/null || true
-	rm -f $(MODEL_ONNX) $(MODEL_FP16) $(MODEL_INT8)
-	rm -f output/infer_results_*.json
 	rm -f $(STARRY_LINK)
-	rm -f starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx
-	rm -rf starry-apps/act-infer/frames act-infer-ort/target act-infer-tpu/target
-	rm -rf output/sg2002 output/rk3588 output/tpu mnt
+	rm -rf starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx starry-apps/act-infer/frames
+	sudo rm -rf act-infer-ort/target act-infer-tpu/target
+	sudo rm -rf output/sg2002 output/rk3588 output/tpu output/lrzsz output/infer_results_*.json mnt
+	rm -rf tgoskits/target tgoskits/tmp
+	rm -rf third_party
