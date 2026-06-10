@@ -1,4 +1,4 @@
 [submodule "tgoskits"]
 	path = tgoskits
 	url = git@github.com:SereneMizu/tgoskits.git
-	branch = sg2002-plat-dyn-tpu-fix
+	branch = feat/yhy

@@ -16,9 +16,9 @@ makefile和脚本禁用sudo，假设权限充足，如需提权，使用sudo mak
 
 ## tgoskits 子模块
 
-- 当前跟踪 `origin/dev` 分支（不再是 sg2002-tpu-v0.1.3 tag）
-- **有4个文件的本地patch**（通过 `git diff` 在 tgoskits 目录可见）：
-  - 把 `#[cfg(all(feature = "sg2002", not(feature = "plat-dyn")))]` 改为 `#[cfg(feature = "sg2002")]`
+- 当前跟踪 `feat/yhy` 分支（`.gitmodules` 的 `branch = feat/yhy`）
+- TPU/ION cfg gate 修复已提交到 `sg2002-plat-dyn-tpu-fix` 分支（`db56ec8f`），`feat/yhy` 基于它还多一个 RK3588 提交（`86f656ac1`，当前 HEAD）
+- 修改内容：把 `#[cfg(all(feature = "sg2002", not(feature = "plat-dyn")))]` 改为 `#[cfg(feature = "sg2002")]`
   - 涉及文件：`file/mod.rs`、`pseudofs/dev/mod.rs`、`pseudofs/sysfs.rs`、`syscall/mm/mmap.rs`
   - 原因：上游 TPU/ION 设备注册只在 `plat_dyn=false`（静态平台）下生效，但静态平台在 SG2002 上启动崩溃（NULL函数指针）。改为 `plat_dyn=true`（动态平台，能正常启动）+ 放开 cfg gate 让 TPU 设备也注册
 - **不要**尝试切到 `plat_dyn=false`，静态平台内核会在 SG2002 上 Instruction access fault
