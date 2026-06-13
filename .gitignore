@@ -8,6 +8,7 @@ __pycache__/
 
 # Rust
 act-infer-ort/target/
+act-infer-rknn/target/
 
 # Dataset and model
 output/
@@ -29,3 +30,4 @@ starry-apps/act-infer/frames/
 
 # macOS
 .DS_Store
+check*.onnx

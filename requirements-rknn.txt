@@ -1,0 +1,16 @@
+# RKNN 模型编译专用环境（Python 3.12，对应 .venv-rknn）
+#
+# 与主 requirements.txt 分离的原因：
+#   rknn-toolkit2 2.3.2 的代码使用 onnx.mapping（onnx 1.16 起被移除），
+#   且要求 numpy<=1.26.4 / torch<=2.4.0，与导出/onnxscript 侧的新版 onnx 冲突。
+#
+# 建库（torch 需用 CPU index 单独装，避免拉入 ~2GB 的 nvidia CUDA 包）：
+#   uv venv --python 3.12 .venv-rknn
+#   uv pip install --python .venv-rknn/bin/python --index-url https://download.pytorch.org/whl/cpu torch==2.4.0
+#   uv pip install --python .venv-rknn/bin/python -r requirements-rknn.txt
+#
+# 系统 apt 依赖：libgl1 libglib2.0-0（opencv-python 运行需要 libGL.so.1）
+
+rknn-toolkit2==2.3.2
+onnx==1.16.1
+numpy==1.26.4

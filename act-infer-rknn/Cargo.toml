@@ -1,0 +1,16 @@
+[package]
+name = "act-infer-rknn"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[build-dependencies]
+# 与 act-infer-tpu 当前的 bindings 生成器版本保持一致
+bindgen = "0.72"

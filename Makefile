@@ -3,10 +3,12 @@
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
         test-host test-qemu build-sg2002 sg2002-sdcard \
-        build-rk3588 rk3588-sdcard \
+        build-rk3588 rk3588-sdcard build-rknn \
         build-lrzsz
 
 PYTHON := .venv/bin/python
+# RKNN 模型编译用独立 venv (3.12)：rknn-toolkit2 仅 cp312 wheel，且依赖 onnx 1.16.1（含 onnx.mapping）
+RKNN_PYTHON := .venv-rknn/bin/python
 
 # --- Containers ---
 
@@ -23,6 +25,11 @@ TPU_DOCKER_EXEC := docker exec $(TPU_DOCKER_NAME)
 TARGET     := riscv64gc-unknown-linux-musl
 TOOLCHAIN  ?= /opt/riscv64-linux-musl-cross
 LINKER_ENV := CARGO_TARGET_$(shell echo $(TARGET) | tr 'a-z-' 'A-Z_')_LINKER=$(TOOLCHAIN)/bin/riscv64-linux-musl-gcc
+
+# RKNN (RK3588) 交叉编译目标为 glibc：librknnrt.so 依赖 glibc (libc.so.6/libstdc++.so.6 等)，
+# 不能用 musl，否则 musl+glibc 混链会冲突。容器内需 apt 装 gcc-aarch64-linux-gnu。
+RKNN_TARGET     := aarch64-unknown-linux-gnu
+RKNN_LINKER_ENV := CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 
 # --- Paths ---
 
@@ -43,6 +50,7 @@ SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
 RK3588_BOARD := os/StarryOS/configs/board/orangepi-5-plus.toml
+RKNN_RKNN    := output/rknn/act_model_rk3588.rknn
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
 all: export-onnx verify-onnx
@@ -87,7 +95,7 @@ docker-up:
 	@if ! docker start $(DOCKER_NAME) 2>/dev/null; then \
 		docker run -d --name $(DOCKER_NAME) --privileged -v "$$(pwd)":/workspace -w /workspace $(DOCKER_IMAGE) sleep infinity; \
 		$(DOCKER_EXEC) apt-get update; \
-		$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted -y; \
+		$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted libclang-dev gcc-aarch64-linux-gnu -y; \
 	fi
 
 docker-shell: docker-up
@@ -133,7 +141,15 @@ $(RK3588_UIMG): docker-up
 
 build-rk3588: $(RK3588_UIMG)
 
-rk3588-sdcard: build-rk3588 $(ROOTFS_RK3588)
+# RKNN 模型编译（主机 .venv-rknn，rknn-toolkit2）+ Rust 交叉编译（容器，aarch64 glibc）
+$(RKNN_RKNN): $(MODEL_ONNX)
+	$(RKNN_PYTHON) scripts/rknn_compile.py --target rk3588
+
+build-rknn: $(RKNN_RKNN) docker-up
+	$(DOCKER_EXEC) bash -c 'rustup default stable 2>/dev/null; rustup target add $(RKNN_TARGET) 2>/dev/null; cd /workspace/act-infer-rknn && $(RKNN_LINKER_ENV) cargo build --release --target $(RKNN_TARGET)'
+	$(DOCKER_EXEC) aarch64-linux-gnu-strip /workspace/act-infer-rknn/target/$(RKNN_TARGET)/release/act-infer-rknn
+
+rk3588-sdcard: build-rk3588 build-rknn $(ROOTFS_RK3588)
 	sudo bash scripts/build-rk3588-sdcard.sh
 
 # === Task 1: SG2002 (TPU) ===
@@ -191,7 +207,7 @@ clean:
 	docker rm $(DOCKER_NAME) $(TPU_DOCKER_NAME) 2>/dev/null || true
 	rm -f $(STARRY_LINK)
 	rm -rf starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx starry-apps/act-infer/frames
-	sudo rm -rf act-infer-ort/target act-infer-tpu/target
-	sudo rm -rf output/sg2002 output/rk3588 output/tpu output/lrzsz output/infer_results_*.json mnt
+	sudo rm -rf act-infer-ort/target act-infer-tpu/target act-infer-rknn/target
+	sudo rm -rf output/sg2002 output/rk3588 output/rknn output/tpu output/lrzsz output/infer_results_*.json mnt
 	sudo rm -rf tgoskits/target tgoskits/tmp /tmp/.tgos-images
 	sudo rm -rf third_party
