@@ -71,8 +71,7 @@ $(RESULT_ONNX): scripts/batch_infer_onnx.py $(MODEL_ONNX)
 verify-onnx: $(RESULT_TORCH) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_TORCH) --result $(RESULT_ONNX)
 
-$(MODEL_FP16): scripts/quantize_onnx.py $(MODEL_ONNX)
-	$(PYTHON) scripts/quantize_onnx.py
+# model_fp16.onnx 由 scripts/convert_onnx_fp16.py 生成（见下方 build-rknn 节）
 
 $(RESULT_FP16): scripts/batch_infer_onnx.py $(MODEL_FP16)
 	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_FP16) --output $(RESULT_FP16)
@@ -141,8 +140,12 @@ $(RK3588_UIMG): docker-up
 
 build-rk3588: $(RK3588_UIMG)
 
+# ONNX FP32 → FP16 预处理（主机 .venv）
+$(MODEL_FP16): $(MODEL_ONNX)
+	$(PYTHON) scripts/convert_onnx_fp16.py
+
 # RKNN 模型编译（主机 .venv-rknn，rknn-toolkit2）+ Rust 交叉编译（容器，aarch64 glibc）
-$(RKNN_RKNN): $(MODEL_ONNX)
+$(RKNN_RKNN): $(MODEL_FP16)
 	$(RKNN_PYTHON) scripts/rknn_compile.py --target rk3588
 
 build-rknn: $(RKNN_RKNN) docker-up
