@@ -1,5 +1,6 @@
-#[path = "bindings.rs"]
-mod bindings;
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
 
 use std::path::{Path, PathBuf};
 use std::ptr;
