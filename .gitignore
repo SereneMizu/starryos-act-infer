@@ -16,6 +16,12 @@ output/
 # tgoskits build artifacts
 tgoskits/tmp/
 
+# Temporary scratch / large intermediate ONNX
+tmp/
+
+# Eval results (large JSON / CSV)
+output/eval/
+
 # Third-party sources & builds (downloaded/built by scripts/build-lrzsz.sh etc.)
 third_party/
 
