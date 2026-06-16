@@ -56,8 +56,8 @@ STARRY_LINK  := tgoskits/apps/starry/act-infer
 
 # CUDA EP 环境: onnxruntime-gpu 需要 nvidia-*-cu12 的 .so, 它们装在
 # site-packages/nvidia/*/lib/, 默认不在 ld.so 搜索路径里.
-NV_LIBS   := $(shell find .venv/lib/*/site-packages/nvidia -name lib -type d 2>/dev/null | tr '\n' ':')
-QUANT_ENV := LD_LIBRARY_PATH=$(NV_LIBS):$$LD_LIBRARY_PATH
+NV_LIBS := $(shell find .venv/lib/*/site-packages/nvidia -name lib -type d 2>/dev/null | tr '\n' ':')
+export LD_LIBRARY_PATH := $(NV_LIBS)$$LD_LIBRARY_PATH
 
 all: export-onnx verify-onnx
 
@@ -83,28 +83,28 @@ verify-onnx: $(RESULT_TORCH) $(RESULT_ONNX)
 
 # 按类别敏感度分析 (5 类, 666 帧, CUDA)
 quant-sensitivity:
-	$(QUANT_ENV) $(PYTHON) scripts/sensitivity_analysis.py
+	$(PYTHON) scripts/sensitivity_analysis.py
 
 # 逐层 leave-one-in 敏感度分析 (conv + attn_out, 找类内坏分子)
 quant-per-layer:
-	$(QUANT_ENV) $(PYTHON) scripts/per_layer_sensitivity.py
+	$(PYTHON) scripts/per_layer_sensitivity.py
 
 # 校准数据采样策略对比 (uniform/all/threshold 等 6 种)
 quant-calib-compare:
-	$(QUANT_ENV) $(PYTHON) scripts/calib_compare.py
+	$(PYTHON) scripts/calib_compare.py
 
 # 生成最终混合精度模型: conv+qkv INT8 + 其余 FP16, 全量校准 (最优策略)
 $(MODEL_MIXED): scripts/quantize_mixed_onnx.py $(MODEL_ONNX)
-	$(QUANT_ENV) $(PYTHON) scripts/quantize_mixed_onnx.py --preset conv+qkv --calib-mode all
+	$(PYTHON) scripts/quantize_mixed_onnx.py --preset conv+qkv --calib-mode all
 
 quant-mixed: $(MODEL_MIXED)
 
 # batch_infer 666 帧 -> infer_results
 $(RESULT_MIXED): scripts/batch_infer_onnx.py $(MODEL_MIXED)
-	$(QUANT_ENV) $(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_MIXED) --output $(RESULT_MIXED)
+	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_MIXED) --output $(RESULT_MIXED)
 
 # verify_results 对比 FP32 参考
-quant-verify: $(RESULT_MIXED)
+quant-verify: $(RESULT_MIXED) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_ONNX) --result $(RESULT_MIXED)
 
 # 一键: 生成模型 -> 推理 -> 验证
