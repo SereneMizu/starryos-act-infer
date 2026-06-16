@@ -27,53 +27,19 @@ ONNX_OPSET = 18
 
 class ACTInferenceWrapper(nn.Module):
     """
-    将 ACTModel 包装为纯确定性模型，消除 CVAE 随机采样。
+    精简 wrapper: 直接调用 model.forward(infer_cvae=False).
 
-    推理策略: 固定零 latent 向量（等价于先验均值），跳过随机采样。
+    infer_cvae=False 让 model 内部走 latent=torch.zeros() 分支 (= E[latent]),
+    与 batch_infer_torch.py 完全同代码路径, 保证 ONNX 部署与 PyTorch 推理数值一致.
+    无需重写 forward 逻辑.
     """
 
     def __init__(self, model: ACTModel):
         super().__init__()
         self.model = model
-        self.config = model.config
 
     def forward(self, images: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
-        config = self.config
-        batch_size = images.shape[0]
-
-        with torch.no_grad():
-            latent = torch.zeros(batch_size, config.latent_dim, device=images.device, dtype=images.dtype)
-
-            vision_features = self.model.vision_encoder(images)
-            state_features = self.model.state_encoder(state)
-            latent_features = self.model.latent_proj(latent).unsqueeze(1)
-
-            encoder_in = torch.cat([latent_features, state_features, vision_features], dim=1)
-
-            seq_len = encoder_in.shape[1]
-            if seq_len <= self.model.encoder_pos_embed.num_embeddings:
-                pos_embed = self.model.encoder_pos_embed.weight[:seq_len].unsqueeze(0)
-            else:
-                repeat_count = (seq_len // self.model.encoder_pos_embed.num_embeddings) + 1
-                pos_embed = self.model.encoder_pos_embed.weight.repeat(1, repeat_count, 1)[:, :seq_len]
-
-            encoder_out = self.model.encoder(encoder_in, pos_embed=pos_embed)
-
-            decoder_pos_embed = self.model.decoder_pos_embed.weight.unsqueeze(0).expand(batch_size, -1, -1)
-            decoder_in = torch.zeros(
-                batch_size, config.action_chunk_size, config.hidden_dim,
-                device=images.device, dtype=images.dtype,
-            ) + decoder_pos_embed
-
-            decoder_out = self.model.decoder(
-                decoder_in, encoder_out,
-                decoder_pos_embed=decoder_pos_embed,
-                encoder_pos_embed=pos_embed,
-            )
-
-            action_pred = self.model.action_head(decoder_out)
-
-        return action_pred
+        return self.model.forward(images, state, action_target=None, infer_cvae=False)["action"]
 
 
 def main():
