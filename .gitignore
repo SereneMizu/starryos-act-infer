@@ -36,4 +36,8 @@ starry-apps/act-infer/frames/
 
 # macOS
 .DS_Store
+
+# mount
+mnt/
+
 check*.onnx
