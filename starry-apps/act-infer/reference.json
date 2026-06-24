@@ -1,0 +1,16 @@
+[
+  {
+    "frame": "frame_000000.jpg",
+    "left_vel": -0.001581,
+    "right_vel": 0.007236,
+    "gripper_target": -0.0,
+    "turn": "LEFT"
+  },
+  {
+    "frame": "frame_000227.jpg",
+    "left_vel": 0.006117,
+    "right_vel": -0.000452,
+    "gripper_target": -0.0,
+    "turn": "RIGHT"
+  }
+]

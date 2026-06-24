@@ -11,7 +11,11 @@ mnt="$proj/mnt/rootfs"
 mkdir -p "$mnt"
 mount -o loop "$rootfs_img" "$mnt"
 
-chroot "$mnt" /bin/sh -c 'apk add --no-cache onnxruntime'
+chroot "$mnt" /bin/sh -c '
+  echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/main" > /etc/apk/repositories
+  echo "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/community" >> /etc/apk/repositories
+  apk add --no-cache onnxruntime
+'
 ln -sf libonnxruntime.so.1 "$mnt/usr/lib/libonnxruntime.so"
 
 umount "$mnt"

@@ -5,7 +5,7 @@
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
         test-host test-qemu build-sg2002 sg2002-sdcard \
-        build-rk3588 rk3588-sdcard build-rknn \
+        build-rk3588 rk3588-sdcard build-rknn quant-rknn-hybrid \
         build-lrzsz
 
 PYTHON := .venv/bin/python
@@ -43,8 +43,8 @@ RESULT_TORCH := output/infer_results_torch.json
 RESULT_ONNX  := output/infer_results_onnx.json
 RESULT_MIXED := output/infer_results_mixed_conv+qkv.json
 IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
-ROOTFS_BASE  := /tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img
-ROOTFS_APP   := /tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-act-infer.img
+ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img
+ROOTFS_ORT  := $(ROOTFS_BASE)
 ROOTFS_RK3588 := /tmp/.tgos-images/rootfs-aarch64-debian.img/rootfs-aarch64-debian.img
 TGOSIMAGES   := https://github.com/rcore-os/tgosimages/releases/download/v0.0.7
 SG2002_UIMG  := output/sg2002/starryos.uimg
@@ -52,6 +52,7 @@ SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
 RK3588_BOARD := os/StarryOS/configs/board/orangepi-5-plus.toml
 RKNN_RKNN    := output/rknn/act_model_rk3588.rknn
+RKNN_HYBRID  := output/rknn/act_model_rk3588_hybrid.rknn
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
 # CUDA EP 环境: onnxruntime-gpu 需要 nvidia-*-cu12 的 .so, 它们装在
@@ -115,6 +116,7 @@ quant-all: quant-mixed quant-verify
 docker-up:
 	@if ! docker start $(DOCKER_NAME) 2>/dev/null; then \
 		docker run -d --name $(DOCKER_NAME) --privileged -v "$$(pwd)":/workspace -w /workspace $(DOCKER_IMAGE) sleep infinity; \
+		$(DOCKER_EXEC) bash -c 'sed -i "s@http://.*archive.ubuntu.com@https://mirrors.tuna.tsinghua.edu.cn@g" /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null; true'; \
 		$(DOCKER_EXEC) apt-get update; \
 		$(DOCKER_EXEC) apt-get install u-boot-tools fdisk parted libclang-dev gcc-aarch64-linux-gnu -y; \
 	fi
@@ -130,7 +132,7 @@ tpu-up:
 	@if ! docker start $(TPU_DOCKER_NAME) 2>/dev/null; then \
 		docker run -d --privileged --name $(TPU_DOCKER_NAME) -v "$$(pwd)":/workspace -w /workspace $(TPU_IMAGE) sleep infinity; \
 	fi
-	$(TPU_DOCKER_EXEC) pip install tpu_mlir; \
+	$(TPU_DOCKER_EXEC) pip install tpu_mlir -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple; \
 
 tpu-shell: tpu-up
 	docker exec -it $(TPU_DOCKER_NAME) bash
@@ -146,7 +148,7 @@ test-host: docker-up $(MODEL_ONNX)
 	$(DOCKER_EXEC) bash scripts/install-ort.sh
 	$(DOCKER_EXEC) /workspace/act-infer-ort/target/release/act-infer-ort --model /workspace/$(MODEL_ONNX) --dir /workspace/$(IMG_DIR) --stats /workspace/output/dataset/meta/stats.json --reference /workspace/$(RESULT_ONNX)
 
-test-qemu: docker-up $(MODEL_ONNX) $(ROOTFS_APP)
+test-qemu: docker-up $(MODEL_ONNX) $(ROOTFS_ORT)
 	ln -sfn ../../../starry-apps/act-infer $(STARRY_LINK)
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-ort && rustup default stable 2>/dev/null; rustup target add $(TARGET) 2>/dev/null; $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	bash scripts/prepare-app-files.sh
@@ -173,6 +175,12 @@ $(RKNN_RKNN): $(MODEL_FP16)
 build-rknn: $(RKNN_RKNN) docker-up
 	$(DOCKER_EXEC) bash -c 'rustup default stable 2>/dev/null; rustup target add $(RKNN_TARGET) 2>/dev/null; cd /workspace/act-infer-rknn && $(RKNN_LINKER_ENV) cargo build --release --target $(RKNN_TARGET)'
 	$(DOCKER_EXEC) aarch64-linux-gnu-strip /workspace/act-infer-rknn/target/$(RKNN_TARGET)/release/act-infer-rknn
+
+# RKNN 混合精度 (conv+qkv QDQ INT8 + 其余 FP16): 已量化 ONNX 直转, 不重新量化
+$(RKNN_HYBRID): scripts/rknn_hybrid_quantize.py $(MODEL_MIXED)
+	$(RKNN_PYTHON) scripts/rknn_hybrid_quantize.py
+
+quant-rknn-hybrid: $(RKNN_HYBRID)
 
 rk3588-sdcard: build-rk3588 build-rknn $(ROOTFS_RK3588)
 	sudo bash scripts/build-rk3588-sdcard.sh
@@ -214,16 +222,13 @@ sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
 
 $(ROOTFS_BASE): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry rootfs --arch riscv64'
-	@mkdir -p /tmp/.tgos-images/rootfs-riscv64-alpine.img
-	docker cp $(DOCKER_NAME):/tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img $(ROOTFS_BASE)
 
 $(ROOTFS_RK3588):
 	@mkdir -p /tmp/.tgos-images/rootfs-aarch64-debian.img
 	[ -f $@ ] || (curl -fSL $(TGOSIMAGES)/rootfs-aarch64-debian.img.tar.xz | tar xJ -C /tmp/.tgos-images/rootfs-aarch64-debian.img)
 
-$(ROOTFS_APP): $(ROOTFS_BASE)
-	cp $(ROOTFS_BASE) $(ROOTFS_APP)
-	bash scripts/prepare-rootfs.sh $(ROOTFS_APP)
+$(ROOTFS_ORT): $(ROOTFS_BASE)
+	sudo bash scripts/prepare-rootfs.sh $(ROOTFS_BASE)
 
 # === Clean ===
 
@@ -234,5 +239,5 @@ clean:
 	rm -rf starry-apps/act-infer/act-infer-ort starry-apps/act-infer/model.onnx starry-apps/act-infer/frames
 	sudo rm -rf act-infer-ort/target act-infer-tpu/target act-infer-rknn/target
 	sudo rm -rf output/sg2002 output/rk3588 output/rknn output/tpu output/lrzsz output/infer_results_*.json mnt
-	sudo rm -rf tgoskits/target tgoskits/tmp /tmp/.tgos-images
+	sudo rm -rf tgoskits/target tgoskits/tmp/axbuild/starry-app /tmp/.tgos-images
 	sudo rm -rf third_party

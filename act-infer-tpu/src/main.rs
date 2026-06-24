@@ -242,53 +242,52 @@ fn read_bf16_from_tensor(ptr: *const u8, len: usize) -> Vec<f32> {
     out
 }
 
-fn read_self_vm_kb() -> u64 {
-    let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+fn read_mem_free_kb() -> u64 {
+    let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     for line in s.lines() {
-        if line.starts_with("VmSize:") {
-            return line
-                .split_whitespace()
-                .nth(1)
-                .and_then(|x| x.parse().ok())
-                .unwrap_or(0);
+        if line.starts_with("MemFree:") {
+            return line.split_whitespace().nth(1).unwrap_or("0").parse().unwrap_or(0);
         }
     }
     0
 }
 
 fn print_mem(tag: &str) {
-    let vm = read_self_vm_kb();
     let s = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let free: u64 = s
-        .lines()
-        .find(|l| l.starts_with("MemFree:"))
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|x| x.parse().ok())
-        .unwrap_or(0);
-    println!("[mem] {tag}: VmSize={vm}kB  MemFree={free}kB");
+    let mut mem_total = "";
+    let mut mem_free = "";
+    let mut mem_avail = "";
+    for line in s.lines() {
+        if line.starts_with("MemTotal:") {
+            mem_total = line;
+        } else if line.starts_with("MemFree:") {
+            mem_free = line;
+        } else if line.starts_with("MemAvailable:") {
+            mem_avail = line;
+        }
+    }
+    println!("[mem] {tag}: {mem_total}  {mem_free}  {mem_avail}");
 }
 
 struct MemTracker {
-    peak_vm_kb: Arc<AtomicU64>,
+    min_free: Arc<AtomicU64>,
 }
 
 impl MemTracker {
     fn new() -> Self {
-        let peak_vm_kb = Arc::new(AtomicU64::new(0));
-        let c = peak_vm_kb.clone();
+        let min_free = Arc::new(AtomicU64::new(u64::MAX));
+        let min_free_clone = min_free.clone();
         std::thread::spawn(move || loop {
-            let vm = read_self_vm_kb();
-            let prev = c.load(Ordering::Relaxed);
-            if vm > prev {
-                c.store(vm, Ordering::Relaxed);
-            }
+            let free = read_mem_free_kb();
+            min_free_clone.fetch_min(free, Ordering::Relaxed);
             std::thread::sleep(std::time::Duration::from_millis(10));
         });
-        Self { peak_vm_kb }
+        Self { min_free }
     }
 
-    fn peak_mb(&self) -> u64 {
-        self.peak_vm_kb.load(Ordering::Relaxed) / 1024
+    fn peak_used_mb(&self, baseline_free_kb: u64) -> u64 {
+        let min_free = self.min_free.load(Ordering::Relaxed);
+        (baseline_free_kb.saturating_sub(min_free)) / 1024
     }
 }
 
@@ -298,6 +297,7 @@ fn main() {
     if args.track_mem {
         print_mem("startup");
     }
+    let baseline_free_kb = read_mem_free_kb();
     let tracker = if args.track_mem {
         Some(MemTracker::new())
     } else {
@@ -426,7 +426,7 @@ fn main() {
         print_mem("after all frames");
     }
 
-    print_summary(n, &results, tracker.as_ref().map(|t| t.peak_mb()), reference.as_deref());
+    print_summary(n, &results, tracker.as_ref().map(|t| t.peak_used_mb(baseline_free_kb)), reference.as_deref());
 }
 
 fn print_summary(

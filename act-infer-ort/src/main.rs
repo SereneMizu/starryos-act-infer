@@ -35,9 +35,9 @@ impl MemTracker {
         Self { min_free }
     }
 
-    fn peak_used_mb(&self, total_kb: u64) -> u64 {
+    fn peak_used_mb(&self, baseline_free_kb: u64) -> u64 {
         let min_free = self.min_free.load(Ordering::Relaxed);
-        (total_kb.saturating_sub(min_free)) / 1024
+        (baseline_free_kb.saturating_sub(min_free)) / 1024
     }
 
     fn reset(&self) {
@@ -209,7 +209,8 @@ fn collect_frames(dir: &Path) -> Vec<PathBuf> {
 
 struct FrameResult {
     frame: String,
-    infer_us: u128,
+    img_load_ms: u128,
+    infer_ms: u128,
     left_vel: f32,
     right_vel: f32,
     turn: String,
@@ -221,7 +222,7 @@ fn infer_all(
     frames: &[PathBuf],
     reference: Option<&[RefEntry]>,
     track_mem: bool,
-    total_kb: u64,
+    baseline_free_kb: u64,
 ) -> ort::Result<(Vec<FrameResult>, Option<u64>)> {
     let tracker = if track_mem {
         Some(MemTracker::new())
@@ -235,12 +236,15 @@ fn infer_all(
     for (i, frame_path) in frames.iter().enumerate() {
         let name = frame_path.file_name().unwrap_or_default().to_string_lossy();
 
+        let t_img = Instant::now();
         let img_tensor = preprocess_image(frame_path)?;
+        let img_load_ms = t_img.elapsed().as_millis();
+
         let state_tensor = make_state_tensor(norm)?;
 
         let t_infer = Instant::now();
         let outputs = session.run(ort::inputs![img_tensor, state_tensor])?;
-        let infer_us = t_infer.elapsed().as_micros();
+        let infer_ms = t_infer.elapsed().as_millis();
 
         let arr = outputs[0].try_extract_array::<f32>()?;
         let view = arr.view().into_dyn();
@@ -275,11 +279,11 @@ fn infer_all(
         if let Some(ref_e) = ref_info {
             let ref_turn = &ref_e.turn;
             println!(
-                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5} ref={ref_turn:<5} [{match_tag}]"
+                "[{name}] img={img_load_ms}ms  infer={infer_ms}ms  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5} ref={ref_turn:<5} [{match_tag}]"
             );
         } else {
             println!(
-                "[{name}] infer={infer_us}us  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5}"
+                "[{name}] img={img_load_ms}ms  infer={infer_ms}ms  left={left_vel:+.6}  right={right_vel:+.6}  turn={turn:<5}"
             );
         }
 
@@ -289,35 +293,49 @@ fn infer_all(
 
         results.push(FrameResult {
             frame: name.into_owned(),
-            infer_us,
+            img_load_ms,
+            infer_ms,
             left_vel,
             right_vel,
             turn: turn.to_string(),
         });
     }
 
-    let peak = tracker.as_ref().map(|t| t.peak_used_mb(total_kb));
+    let peak = tracker.as_ref().map(|t| t.peak_used_mb(baseline_free_kb));
     Ok((results, peak))
 }
 
 fn print_summary(
     n: usize,
+    model_load_ms: u128,
     results: &[FrameResult],
     peak_mb: Option<u64>,
     reference: Option<&[RefEntry]>,
 ) {
-    let infer_times: Vec<u128> = results.iter().map(|r| r.infer_us).collect();
+    let infer_times: Vec<u128> = results.iter().map(|r| r.infer_ms).collect();
+    let img_times: Vec<u128> = results.iter().map(|r| r.img_load_ms).collect();
 
     let infer_sum: u128 = infer_times.iter().sum();
     let infer_avg = infer_sum as f64 / n as f64;
     let infer_min = infer_times.iter().min().unwrap();
     let infer_max = infer_times.iter().max().unwrap();
 
+    let img_sum: u128 = img_times.iter().sum();
+    let img_avg = img_sum as f64 / n as f64;
+    let img_min = img_times.iter().min().unwrap();
+    let img_max = img_times.iter().max().unwrap();
+
     println!("\n===== SUMMARY =====");
     println!("frames:      {n}");
+    println!("model load:  {model_load_ms}ms");
     println!(
-        "infer total: {:.2}ms  avg: {:.1}us  min: {infer_min}us  max: {infer_max}us",
-        infer_sum as f64 / 1000.0,
+        "img   total: {}ms  avg: {:.1}ms  min: {img_min}ms  max: {img_max}ms",
+        img_sum,
+        img_avg,
+    );
+    println!(
+        "infer total: {}ms  avg: {:.1}ms  min: {infer_min}ms  max: {infer_max}ms",
+        infer_sum,
         infer_avg,
     );
     if let Some(peak) = peak_mb {
@@ -386,7 +404,7 @@ fn main() -> ort::Result<()> {
     if args.track_mem {
         print_mem("startup");
     }
-    let total_kb = read_mem_free_kb();
+    let baseline_free_kb = read_mem_free_kb();
 
     let stats_path = args.stats;
     let norm = NormParams::load(&stats_path);
@@ -413,12 +431,12 @@ fn main() -> ort::Result<()> {
         println!("[verify] reference: {} frames", ref_entries.len());
     }
 
-    let (results, peak_mb) = infer_all(&mut session, &norm, &frames, reference.as_deref(), args.track_mem, total_kb)?;
+    let (results, peak_mb) = infer_all(&mut session, &norm, &frames, reference.as_deref(), args.track_mem, baseline_free_kb)?;
 
     if args.track_mem {
         print_mem("after all frames");
     }
-    print_summary(n, &results, peak_mb, reference.as_deref());
+    print_summary(n, load_ms, &results, peak_mb, reference.as_deref());
 
     Ok(())
 }
