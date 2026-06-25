@@ -42,6 +42,7 @@ MODEL_MIXED  := output/train/model_mixed_conv+qkv.onnx
 RESULT_TORCH := output/infer_results_torch.json
 RESULT_ONNX  := output/infer_results_onnx.json
 RESULT_MIXED := output/infer_results_mixed_conv+qkv.json
+REF_TEST     := output/test/reference.json
 IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
 ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img
 ROOTFS_ORT  := $(ROOTFS_BASE)
@@ -74,6 +75,9 @@ $(RESULT_TORCH): scripts/batch_infer_torch.py $(MODEL_PT)
 
 $(RESULT_ONNX): scripts/batch_infer_onnx.py $(MODEL_ONNX)
 	$(PYTHON) scripts/batch_infer_onnx.py
+
+$(REF_TEST): scripts/extract_test_reference.py $(RESULT_TORCH)
+	$(PYTHON) scripts/extract_test_reference.py
 
 verify-onnx: $(RESULT_TORCH) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_TORCH) --result $(RESULT_ONNX)
@@ -148,7 +152,7 @@ test-host: docker-up $(MODEL_ONNX)
 	$(DOCKER_EXEC) bash scripts/install-ort.sh
 	$(DOCKER_EXEC) /workspace/act-infer-ort/target/release/act-infer-ort --model /workspace/$(MODEL_ONNX) --dir /workspace/$(IMG_DIR) --stats /workspace/output/dataset/meta/stats.json --reference /workspace/$(RESULT_ONNX)
 
-test-qemu: docker-up $(MODEL_ONNX) $(ROOTFS_ORT)
+test-qemu: docker-up $(MODEL_ONNX) $(REF_TEST) $(ROOTFS_ORT)
 	ln -sfn ../../../starry-apps/act-infer $(STARRY_LINK)
 	$(DOCKER_EXEC) bash -c 'cd /workspace/act-infer-ort && rustup default stable 2>/dev/null; rustup target add $(TARGET) 2>/dev/null; $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	bash scripts/prepare-app-files.sh
