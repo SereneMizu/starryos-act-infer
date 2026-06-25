@@ -96,3 +96,4 @@ tgoskits是上游代码，应当避免修改（当前已在dev分支上有局部
 - git提交信息用Conventional Commits风格：`feat:` / `refactor:` / `chore:` + 中文单行
 - 不要手动运行 `cargo` 命令，统一用 `make` 目标
 - Makefile中已配置apt（清华）、apk（清华）、pip（清华）国内镜像源
+- make 命令用 Bash tool 执行（带足够 timeout），不要用 pty_spawn

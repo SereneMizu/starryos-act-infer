@@ -222,13 +222,11 @@ sg2002-sdcard: build-sg2002 verify-onnx $(ROOTFS_BASE)
 
 $(ROOTFS_BASE): docker-up
 	$(DOCKER_EXEC) bash -c 'cd /workspace/tgoskits && cargo xtask starry rootfs --arch riscv64'
+	sudo bash scripts/prepare-rootfs.sh $@
 
 $(ROOTFS_RK3588):
 	@mkdir -p /tmp/.tgos-images/rootfs-aarch64-debian.img
 	[ -f $@ ] || (curl -fSL $(TGOSIMAGES)/rootfs-aarch64-debian.img.tar.xz | tar xJ -C /tmp/.tgos-images/rootfs-aarch64-debian.img)
-
-$(ROOTFS_ORT): $(ROOTFS_BASE)
-	sudo bash scripts/prepare-rootfs.sh $(ROOTFS_BASE)
 
 # === Clean ===
 
