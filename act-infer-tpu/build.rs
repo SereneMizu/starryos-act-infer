@@ -9,15 +9,26 @@ fn main() {
     println!("cargo:rerun-if-changed={}", header.display());
     println!("cargo:rerun-if-changed={}", crate_dir.join("include/cvitpu_debug.h").display());
 
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(header.to_string_lossy().into_owned())
         .clang_arg(format!("-I{}", crate_dir.join("include").display()))
         .default_enum_style(bindgen::EnumVariation::Rust { non_exhaustive: false })
         .allowlist_function("CVI_NN_.*")
         .allowlist_type("CVI_.*")
-        .allowlist_var("CVI_.*")
-        .generate()
-        .expect("Unable to generate CVI bindings");
+        .allowlist_var("CVI_.*");
+
+    // 交叉编译 riscv64musl 时，指定 sysroot 避免 clang 使用 host x86 headers
+    // Cargo target "riscv64gc-unknown-linux-musl" → clang target "riscv64-linux-musl"
+    if let Ok(target) = env::var("TARGET") {
+        if target.contains("riscv64") && target.contains("musl") {
+            let sysroot = "/opt/riscv64-linux-musl-cross/riscv64-linux-musl";
+            builder = builder
+                .clang_arg("--target=riscv64-linux-musl".to_string())
+                .clang_arg(format!("--sysroot={}", sysroot));
+        }
+    }
+
+    let bindings = builder.generate().expect("Unable to generate CVI bindings");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings

@@ -5,7 +5,7 @@ proj="$(cd "$(dirname "$0")/.." && pwd)"
 out="$proj/output/sg2002"
 mnt="$proj/mnt/sg2002_rootfs"
 
-ROOTFS_IMG="/tmp/.tgos-images/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img"
+ROOTFS_IMG="$proj/tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img"
 BOOT_IMG="$proj/sdboot/sg2002-boot.img"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
