@@ -1,6 +1,8 @@
 # 文档
 
 [初赛文档](./docs/初赛文档.md)
+[初赛视频](https://pan.quark.cn/s/e6ecc2404021?pwd=raYz)
+[初赛幻灯片](./docs/初赛幻灯片.pptx)
 
 # Pro57 — ACT 模型嵌入式推理部署
 
@@ -114,6 +116,7 @@ jupyter notebook infer.ipynb   # 推理
 | `latent` | `[1, 32]`          | CVAE 隐变量（推理时从训练统计中采样的固定分布）           |
 
 **预处理流程**:
+
 1. 图像: `Resize(224,224)` → `ToTensor()` → `Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])`
 2. 状态: `2 * (x - q01) / (q99 - q01) - 1`（QUANTILES 归一化，参数见 `meta/stats.json`）
 
@@ -124,6 +127,7 @@ jupyter notebook infer.ipynb   # 推理
 | `action` | `[1, action_chunk_size, action_dim]` | 预测的动作 chunk（默认 8 步 × 3 维） |
 
 **后处理流程**:
+
 - 反归一化: `(action + 1) / 2 * (q99 - q01) + q01`
 - 输出维度: `[left_vel, right_vel, gripper_target]`
 - 实际执行时通常只取第一个时间步
@@ -190,8 +194,8 @@ dataset/<user_id>/default/
 
 ```json
 {
-  "observation.state": { "q01": [-0.023, -0.100], "q99": [0.200, 0.200] },
-  "action": { "q01": [-0.100, -0.100, 0.0], "q99": [0.200, 0.200, 0.0] }
+  "observation.state": { "q01": [-0.023, -0.1], "q99": [0.2, 0.2] },
+  "action": { "q01": [-0.1, -0.1, 0.0], "q99": [0.2, 0.2, 0.0] }
 }
 ```
 
