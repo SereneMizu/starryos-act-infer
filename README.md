@@ -1,8 +1,8 @@
 # 文档
 
-[初赛文档](./docs/初赛文档.md)
-[初赛视频](https://pan.quark.cn/s/e6ecc2404021?pwd=raYz)
-[初赛幻灯片](./docs/初赛幻灯片.pptx)
+- [初赛文档](./docs/初赛文档.md)
+- [初赛视频](https://pan.quark.cn/s/e6ecc2404021?pwd=raYz)
+- [初赛幻灯片](./docs/初赛幻灯片.pptx)
 
 # Pro57 — ACT 模型嵌入式推理部署
 
