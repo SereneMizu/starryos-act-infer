@@ -38,10 +38,10 @@ RKNN_LINKER_ENV := CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-g
 MODEL_PT     := output/train/model.pt
 MODEL_ONNX   := output/train/model.onnx
 MODEL_FP16   := output/train/model_fp16.onnx
-MODEL_MIXED  := output/train/model_mixed_conv+qkv.onnx
+MODEL_MIXED  := output/train/model_mixed_enc_full.onnx
 RESULT_TORCH := output/infer_results_torch.json
 RESULT_ONNX  := output/infer_results_onnx.json
-RESULT_MIXED := output/infer_results_mixed_conv+qkv.json
+RESULT_MIXED := output/infer_results_mixed_enc_full.json
 REF_TEST     := output/test/reference.json
 IMG_DIR      := output/dataset/videos/observation.images.fpv/chunk-000
 ROOTFS_BASE  := tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img/rootfs-riscv64-alpine.img
@@ -56,10 +56,7 @@ RKNN_RKNN    := output/rknn/act_model_rk3588.rknn
 RKNN_HYBRID  := output/rknn/act_model_rk3588_hybrid.rknn
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
-# CUDA EP 环境: onnxruntime-gpu 需要 nvidia-*-cu12 的 .so, 它们装在
-# site-packages/nvidia/*/lib/, 默认不在 ld.so 搜索路径里.
-NV_LIBS := $(shell find .venv/lib/*/site-packages/nvidia -name lib -type d 2>/dev/null | tr '\n' ':')
-export LD_LIBRARY_PATH := $(NV_LIBS)$$LD_LIBRARY_PATH
+# CUDA EP 环境已移除: 改用纯 CPU onnxruntime (AVX-VNNI 加速 INT8).
 
 all: export-onnx verify-onnx
 
@@ -83,10 +80,11 @@ verify-onnx: $(RESULT_TORCH) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_TORCH) --result $(RESULT_ONNX)
 
 # === Mixed-precision quantization (INT8 + FP16) ===
-# 详见 docs/quantization_v2.md. CUDA EP 加速 (需要 onnxruntime-gpu + nvidia-*-cu12).
-# 策略: conv(21) + qkv(32) -> INT8, 其余 -> FP16, 全量 666 帧校准.
+# 详见 docs/quantization_v2.md. CPU EP (AVX-VNNI 加速 INT8 GEMM).
+# 策略 (enc_full): encoder 全 INT8 (conv+qkv+ffn+attn_out) + decoder 仅 qkv INT8,
+#   decoder ffn/attn 敏感保 FP16. 比 conv+qkv 快 19%, 精度 98.8%.
 
-# 按类别敏感度分析 (5 类, 666 帧, CUDA)
+# 按类别敏感度分析 (5 类, 666 帧, CPU)
 quant-sensitivity:
 	$(PYTHON) scripts/sensitivity_analysis.py
 
@@ -98,15 +96,15 @@ quant-per-layer:
 quant-calib-compare:
 	$(PYTHON) scripts/calib_compare.py
 
-# 生成最终混合精度模型: conv+qkv INT8 + 其余 FP16, 全量校准 (最优策略)
+# 生成最终混合精度模型: enc_full (encoder 全 INT8 + decoder 仅 qkv INT8; conv 仅 encoder 有)
 $(MODEL_MIXED): scripts/quantize_mixed_onnx.py $(MODEL_ONNX)
-	$(PYTHON) scripts/quantize_mixed_onnx.py --preset conv+qkv --calib-mode all
+	$(PYTHON) scripts/quantize_mixed_onnx.py --preset enc_full --calib-mode all
 
 quant-mixed: $(MODEL_MIXED)
 
-# batch_infer 666 帧 -> infer_results
+# batch_infer 666 帧 -> infer_results (5 轮测速取中位数)
 $(RESULT_MIXED): scripts/batch_infer_onnx.py $(MODEL_MIXED)
-	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_MIXED) --output $(RESULT_MIXED)
+	$(PYTHON) scripts/batch_infer_onnx.py --model $(MODEL_MIXED) --output $(RESULT_MIXED) --rounds 5
 
 # verify_results 对比 FP32 参考
 quant-verify: $(RESULT_MIXED) $(RESULT_ONNX)

@@ -1,7 +1,7 @@
-"""按类别 INT8 敏度分析 (666 帧, CUDA 推理)
+"""按类别 INT8 敏度分析 (666 帧, CPU 推理)
 
 对每个算子类别 (Conv / QKV / AttnOut / FFN1 / FFN2) 单独做 INT8 静态量化
-(其他全部 FP32), 用 CUDA 跑全量 666 帧评估. 这样能隔离每类算子对 INT8 的
+(其他全部 FP32), 用 CPU 跑全量 666 帧评估. 这样能隔离每类算子对 INT8 的
 固有敏感度, 指导最终的"哪些类 INT8 / 哪些类 FP16"决策.
 
 ## 重要
@@ -23,7 +23,6 @@ conv-only / qkv-only 出现 "turn drop = 0%" 的假象 (实测 666 帧下 conv-o
 足够. 如确需逐层, 单独写脚本复用 preprocessed 缓存即可.
 
 用法:
-    source scripts/cuda-env.sh
     .venv/bin/python scripts/sensitivity_analysis.py                   # 全部 5 类
     .venv/bin/python scripts/sensitivity_analysis.py --categories conv # 只跑指定类
     .venv/bin/python scripts/sensitivity_analysis.py --frames 100      # 快速测试
@@ -45,7 +44,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from quantize_mixed_onnx import (
     MODEL_FP32, STATS_PATH, IMG_DIR, REF_PATH, IMAGE_TRANSFORM, load_stats,
-    classify_nodes, make_calibration_reader, PRESETS,
+    classify_nodes, make_calibration_reader, PRESETS, _filter_by_scope,
 )
 
 CACHE_DIR = PROJECT_ROOT / "tmp" / "sensitivity_cache"
@@ -112,8 +111,7 @@ def quantize_preset(preset, out_path, calib_count=100):
     cfg = PRESETS[preset]
     nodes = []
     for cat in ("conv", "ffn1", "ffn2", "qkv", "attn_out_proj"):
-        if cfg[cat]:
-            nodes += sorted(cls[cat])
+        nodes += _filter_by_scope(cls[cat], cfg[cat])
 
     reader = make_calibration_reader("uniform", count=calib_count, threshold=0.0)
     quantize_static(
@@ -138,7 +136,7 @@ def run_inference(model_path, img_tensors, state_np, warmup=3):
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess = ort.InferenceSession(
         str(model_path), sess_opts,
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        providers=["CPUExecutionProvider"],
     )
     for _ in range(warmup):
         sess.run(None, {"images": img_tensors[0], "state": state_np})
@@ -211,8 +209,7 @@ def main():
             cfg = PRESETS[preset]
             nodes = []
             for cat in ("conv", "ffn1", "ffn2", "qkv", "attn_out_proj"):
-                if cfg[cat]:
-                    nodes += sorted(cls[cat])
+                nodes += _filter_by_scope(cls[cat], cfg[cat])
 
         try:
             actions, avg_ms = run_inference(out_path, img_tensors, state_np)

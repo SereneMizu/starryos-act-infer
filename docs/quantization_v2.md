@@ -1,6 +1,7 @@
 # ONNX 混合精度量化
 
-ACT 模型的 INT8 + FP16 混合精度量化方案. 基于 666 帧全量评估, 用 CUDA EP 加速.
+ACT 模型的 INT8 + FP16 混合精度量化方案. 基于 666 帧全量评估, 纯 CPU EP
+(AVX-VNNI 加速 INT8 GEMM, 无需 GPU).
 
 ## 评估方法
 
@@ -9,7 +10,7 @@ ACT 模型的 INT8 + FP16 混合精度量化方案. 基于 666 帧全量评估, 
 - 666 帧全量评估 (`output/dataset/videos/observation.images.fpv/chunk-000/*.jpg`)
 - 参考: `output/infer_results_onnx.json` (FP32 ONNX 的完整推理结果)
 - 指标: turn match (LEFT/RIGHT/STRAIGHT 方向一致率), max_diff (速度最大绝对误差)
-- 推理设备: CUDA EP (RTX 4050), 比纯 CPU 快 4 倍 (5ms vs 21ms/帧)
+- 推理设备: CPU EP (AVX-VNNI), 纯 CPU 量化路径, 嵌入式部署的真实场景
 
 ## 模型结构
 
@@ -37,11 +38,10 @@ FFN/QKV 投影在预处理后都是 Gemm.
 脚本: `scripts/sensitivity_analysis.py`
 
 ```bash
-source scripts/cuda-env.sh  # CUDA 加速 (可选, 趋势一致)
 .venv/bin/python scripts/sensitivity_analysis.py
 ```
 
-### 结果 (666 帧, CUDA EP)
+### 结果 (666 帧, CPU EP)
 
 | 类别 | 节点数 | turn match | drop | max_diff | 结论 |
 |------|--------|-----------|------|----------|------|
@@ -71,12 +71,11 @@ leave-one-in: 每个层单独 INT8 (其余 FP32), 找出类内的坏分子. 明�
 脚本: `scripts/per_layer_sensitivity.py`
 
 ```bash
-source scripts/cuda-env.sh
 .venv/bin/python scripts/per_layer_sensitivity.py                   # 默认 conv + attn_out
 .venv/bin/python scripts/per_layer_sensitivity.py --categories conv # 指定类别
 ```
 
-### 结果 (666 帧, CUDA EP)
+### 结果 (666 帧, CPU EP)
 
 | 类别 | 数量 | SAFE (<0.5%) | WARN (0.5~2%) | BAD (≥2%) | 中位 drop | 最大 drop |
 |------|------|--------------|---------------|-----------|-----------|-----------|
@@ -106,21 +105,48 @@ source scripts/cuda-env.sh
 
 ## 量化策略
 
-基于类别 + 逐层敏感度分析, 选定 **conv + qkv → INT8, 其余 → FP16**:
+基于类别 + 逐层敏感度分析 + 算子级 profiling, 选定 **enc_full** 策略:
+encoder 全 INT8 (conv+qkv+ffn+attn_out), decoder 仅 qkv INT8 (ffn/attn 敏感保 FP16).
+注: conv 只存在于 vision_encoder (ResNet18), 无 decoder conv.
+
+### 策略演进 (CPU EP, AVX-VNNI)
+
+| 策略 | INT8 节点 | 大小 | turn match | ms/帧 | 加速 | 结论 |
+|------|----------|------|-----------|-------|------|------|
+| FP32 baseline | 0 | 193 MB | 100% | 21.6 | — | 参考 |
+| conv+qkv | 53 | 75 MB | 99.1% | 16.0 | 快 26% | 原方案 |
+| conv+qkv+enc_ffn | 61 | 67 MB | 98.6% | 13.5 | 快 37% | 加 encoder ffn |
+| **enc_full (推荐)** | **65** | **66 MB** | **98.8%** | **12.9** | **快 40%** | **+encoder attn_out** |
+| mixed (all ffn) | 69 | 54 MB | 85.3% | 12.1 | 快 44% | decoder ffn 崩 |
+
+关键发现:
+- **FFN 是最大瓶颈** (profiling 占 35% 时间), 量化 encoder ffn 收益最大 (快 2.5ms).
+- **decoder ffn 敏感**: 全量化 ffn 掉到 85.3%, 因 ffn2 (3200->512) 是信息瓶颈,
+  INT8 误差经残差放大. encoder ffn 安全 (输入来自 ResNet, 分布稳定).
+- **encoder attn_out 全 SAFE** (逐层分析 drop=0%), decoder attn_out 有 4 个坏分子
+  (layers.2/3), 故只量化 encoder 的 4 个.
+- **加 encoder attn_out 增益小** (0.6ms), 因 attn_out 维度小; 但精度不降, 故纳入.
+
+### 最终分层 (enc_full)
 
 | 类别 | 量化方式 | 理由 |
 |------|---------|------|
-| Conv (21) | INT8 | drop 1.95%, x86 有 AVX-VNNI 加速 |
-| QKV (32) | INT8 | drop 0.90%, 最不敏感 |
-| attn_out (11) | FP16 | drop 2.25%, 边界值保守处理 |
-| FFN1 (8) | FP16 | drop 5.71%, 敏感 |
-| FFN2 (8) | FP16 | drop 15.47%, 最敏感 |
+| Conv (21, 全 encoder) | INT8 | drop 1.95%, AVX-VNNI 加速 |
+| QKV (32, enc+dec) | INT8 | drop 0.90%, 最不敏感 |
+| encoder FFN1 (4) | INT8 | encoder 安全, profiling 最大瓶颈 |
+| encoder FFN2 (4) | INT8 | encoder 安全 |
+| encoder attn_out (4) | INT8 | 逐层分析全 SAFE (drop=0%) |
+| decoder FFN1 (4) | FP16 | drop 5.71%, 敏感 |
+| decoder FFN2 (4) | FP16 | drop 15.47%, 最敏感 |
+| decoder attn_out (7) | FP16 | 4 个坏分子 (layers.2/3, drop 1.2~2.7%) |
 | attn_core (22) | FP16 | softmax 附近动态范围大 |
 | LayerNorm/Softmax/Erf/CumSum | FP32 | FP16 下方差/exp/累加溢出 |
 
 两阶段流程:
-1. **Stage 1**: conv+qkv 静态 INT8 量化 (QDQ, per-channel 对称权重 + 非对称激活)
+1. **Stage 1**: 选定层静态 INT8 量化 (QDQ, per-channel 对称权重 + 非对称激活)
 2. **Stage 2**: 剩余 FP32 部分 → FP16 (LayerNorm/Softmax/Erf/CumSum 保持 FP32)
+
+生成: `scripts/quantize_mixed_onnx.py --preset enc_full` (preset 内置 encoder/decoder scope 过滤)
 
 ## 校准策略对比
 
@@ -133,11 +159,10 @@ INT8 的 scale/zero_point, 直接影响精度. (first-N 无意义: 按文件名�
 脚本: `scripts/calib_compare.py`
 
 ```bash
-source scripts/cuda-env.sh
 .venv/bin/python scripts/calib_compare.py
 ```
 
-### 结果 (666 帧, CUDA EP)
+### 结果 (666 帧, CPU EP)
 
 | 策略 | 校准帧数 | turn match | drop | max_diff | avg |
 |------|---------|-----------|------|----------|-----|
@@ -163,58 +188,62 @@ source scripts/cuda-env.sh
 ### 生成
 
 ```bash
-source scripts/cuda-env.sh
-# conv+qkv INT8 + 其余 FP16, 全量 666 帧校准 (最优策略)
-.venv/bin/python scripts/quantize_mixed_onnx.py --preset conv+qkv --calib-mode all
-# 输出: output/train/model_mixed_conv+qkv.onnx (79.5 MB)
+make quant-all   # quant-mixed + quant-verify
+# 或手动:
+.venv/bin/python scripts/quantize_mixed_onnx.py --preset enc_full --calib-mode all
+# 输出: output/train/model_mixed_enc_full.onnx (65.7 MB)
 ```
 
-### verify_results (666 帧, 对比 FP32 ONNX 参考)
+### verify_results (666 帧, 对比 FP32 ONNX 参考, 纯 CPU)
 
 ```bash
+make quant-verify
+# 或:
 .venv/bin/python scripts/batch_infer_onnx.py \
-    --model output/train/model_mixed_conv+qkv.onnx \
-    --output output/infer_results_mixed_conv+qkv.json
+    --model output/train/model_mixed_enc_full.onnx \
+    --output output/infer_results_mixed_enc_full.json
 .venv/bin/python scripts/verify_results.py \
     --reference output/infer_results_onnx.json \
-    --result output/infer_results_mixed_conv+qkv.json
+    --result output/infer_results_mixed_enc_full.json
 ```
 
 结果:
 
 | 指标 | 值 |
 |------|-----|
-| 模型大小 | 79.5 MB (FP32 原 202 MB, 压缩 2.5x) |
-| turn match | **660/666 = 99.1%** |
-| max left_vel diff | 0.002783 |
-| max right_vel diff | 0.002225 |
-| 推理速度 (CUDA EP) | ~11.7 ms/帧 |
-| 差异帧 | 6 帧, 全部 \|L-R\| < 0.001 (边界帧) |
+| 模型大小 | 65.7 MB (FP32 原 202 MB, 压缩 3.1x) |
+| turn match | **658/666 = 98.8%** |
+| max left_vel diff | 0.003533 |
+| max right_vel diff | 0.002510 |
+| 推理速度 (CPU EP, 纯推理) | **~12.9 ms/帧** (FP32 21.6ms, 快 40%) |
+| 端到端 (含图像预处理) | ~19 ms/帧 |
+| 差异帧 | 8 帧, 全部 \|L-R\| < 0.001 (边界帧) |
 
-6 个差异帧都是左右轮速极接近的边界情况 (FP32 下 \|L-R\| < 0.001), 实际控制
+差异帧都是左右轮速极接近的边界情况 (FP32 下 \|L-R\| < 0.001), 实际控制
 意义下方向判断本就无意义, 不影响实际部署.
 
 ### 性能对比
 
-| 模型 | 大小 | turn match | max_diff | 备注 |
-|------|------|-----------|----------|------|
-| FP32 baseline | 202 MB | 100.0% | 0 (自对比) | 参考 |
-| Pure FP16 | 101 MB | 99.85% | 0.000125 | x86 CPU 上比 FP32 慢 (无 FP16 单元) |
-| **conv+qkv INT8 + FP16 (all-666 校准)** | **79.5 MB** | **99.1%** | **0.0028** | **推荐** |
+| 模型 | 大小 | turn match | ms/帧 | 加速 | 备注 |
+|------|------|-----------|-------|------|------|
+| FP32 baseline | 202 MB | 100.0% | 21.6 | — | 参考 |
+| Pure FP16 | 101 MB | 99.85% | 24.7 | 慢 14% | x86 CPU 无 FP16 单元, 每层需 Cast |
+| conv+qkv (原方案) | 75 MB | 99.1% | 16.0 | 快 26% | |
+| **enc_full (推荐)** | **66 MB** | **98.8%** | **12.9** | **快 40%** | **encoder 全 INT8** |
+| mixed (all ffn) | 54 MB | 85.3% | 12.1 | 快 44% | decoder ffn 崩, 不可用 |
 
 ## 文件说明
 
 | 文件 | 说明 |
 |------|------|
-| `scripts/sensitivity_analysis.py` | 按类别敏感度分析 (5 类, 666 帧, CUDA) |
+| `scripts/sensitivity_analysis.py` | 按类别敏感度分析 (5 类, 666 帧, CPU) |
 | `scripts/per_layer_sensitivity.py` | 逐层 leave-one-in 敏感度 (conv + attn_out, 找坏分子) |
 | `scripts/calib_compare.py` | 校准数据采样策略对比 (6 种策略) |
-| `scripts/quantize_mixed_onnx.py` | 混合精度量化 (INT8 + FP16 两阶段) |
+| `scripts/quantize_mixed_onnx.py` | 混合精度量化 (INT8 + FP16 两阶段, preset 式, 含 enc_full) |
 | `scripts/batch_infer_onnx.py` | ONNX 批量推理 (生成 infer_results JSON) |
 | `scripts/verify_results.py` | 对比两个 infer_results 的 turn match / max_diff |
-| `scripts/cuda-env.sh` | CUDA EP 运行时库 LD_LIBRARY_PATH 设置 |
 | `tmp/sensitivity_per_class.json` | 按类别敏感度结果 (含每类完整 node 列表) |
 | `tmp/sensitivity_per_layer.json` | 逐层敏感度结果 (含坏分子清单) |
 | `tmp/calib_compare_results.json` | 校准策略对比结果 |
-| `output/train/model_mixed_conv+qkv.onnx` | 最终混合精度模型 (79.5 MB) |
-| `output/infer_results_mixed_conv+qkv.json` | 最终模型 666 帧推理结果 |
+| `output/train/model_mixed_enc_full.onnx` | 最终混合精度模型 (65.7 MB, enc_full 策略) |
+| `output/infer_results_mixed_enc_full.json` | 最终模型 666 帧推理结果 |

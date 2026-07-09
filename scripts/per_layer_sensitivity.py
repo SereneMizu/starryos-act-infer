@@ -1,4 +1,4 @@
-"""逐层 leave-one-in INT8 敏度分析 (666 帧, CUDA 推理)
+"""逐层 leave-one-in INT8 敏度分析 (666 帧, CPU 推理)
 
 针对按类别分析中"不确定"的类别 (conv drop 1.95%, attn_out drop 2.25%),
 对每个层单独做 INT8 (其余 FP32), 找出类内的"坏分子": 哪几个层导致整体
@@ -18,7 +18,6 @@ drop 偏高. 明确的类别不测:
 固有敏感度. (注意: 组合量化时误差会叠加, 最终策略仍需跑组合验证.)
 
 用法:
-    source scripts/cuda-env.sh
     .venv/bin/python scripts/per_layer_sensitivity.py                       # 默认 conv + attn_out
     .venv/bin/python scripts/per_layer_sensitivity.py --categories conv qkv # 指定类别
     .venv/bin/python scripts/per_layer_sensitivity.py --frames 100          # 快速测试

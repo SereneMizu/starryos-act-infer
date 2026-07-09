@@ -1,4 +1,4 @@
-"""校准数据采样策略对比 (conv+qkv INT8 + FP16, 666 帧, CUDA 推理)
+"""校准数据采样策略对比 (conv+qkv INT8 + FP16, 666 帧, CPU 推理)
 
 对 conv+qkv preset 的两阶段混合量化, 对比不同校准数据采样方式对精度的
 影响. 旧文档 (docs/quantization.md) 的校准采样表数字无法复现, 本脚本
@@ -11,7 +11,6 @@
   uniform+thr-X  : 先筛 |L-R| >= X 的帧, 再均匀采样 100 帧
 
 用法:
-    source scripts/cuda-env.sh
     .venv/bin/python scripts/calib_compare.py
 """
 

@@ -60,6 +60,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--rounds", type=int, default=1,
+                        help="推理测速轮数 (>1 时取中位数, 首轮结果写入 output)")
     args = parser.parse_args()
 
     onnx_path = args.model or PROJECT_ROOT / "output" / "train" / "model.onnx"
@@ -71,7 +73,7 @@ def main():
 
     sess_opts = ort.SessionOptions()
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    session = ort.InferenceSession(str(onnx_path), sess_opts, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    session = ort.InferenceSession(str(onnx_path), sess_opts, providers=["CPUExecutionProvider"])
     print(f"Provider: {session.get_providers()}")
 
     state_dim = session.get_inputs()[1].shape[1]
@@ -81,11 +83,32 @@ def main():
     total = len(images)
     print(f"Found {total} images")
 
+    # 预加载图像, 分离预处理与纯推理时间
+    print("Preloading images...")
+    img_nps = [process_image(p) for p in images]
+
+    # warmup (5 帧, 不计时)
+    for img_np in img_nps[:5]:
+        session.run(None, {"images": img_np, "state": state_np})
+
+    # 多轮测速 (纯推理, 不含预处理)
+    times = []
+    for r in range(args.rounds):
+        t0 = time.time()
+        for img_np in img_nps:
+            session.run(None, {"images": img_np, "state": state_np})
+        times.append((time.time() - t0) / total * 1000)
+    if args.rounds > 1:
+        med = sorted(times)[len(times) // 2]
+        print(f"\nInference speed ({args.rounds} rounds, pure inference, no preprocess): "
+              f"median={med:.1f} ms/frame  (min={min(times):.1f}, max={max(times):.1f})")
+    else:
+        print(f"\nInference speed (pure inference, no preprocess): {times[0]:.1f} ms/frame")
+
+    # 收集推理结果 (含 denormalize, 仅一轮, 写入 output)
     results = []
     t0 = time.time()
-
-    for i, img_path in enumerate(images):
-        img_np = process_image(img_path)
+    for i, (img_path, img_np) in enumerate(zip(images, img_nps)):
         action = session.run(None, {"images": img_np, "state": state_np})[0]
         first_step = denormalize_action(action[0, 0], stats).tolist()
 
@@ -106,9 +129,6 @@ def main():
             print(f"  [{i+1}/{total}] {img_path.name} | {turn:>8s} | "
                   f"left={left_vel:+.6f} right={right_vel:+.6f} | "
                   f"elapsed={elapsed:.1f}s eta={eta:.1f}s")
-
-    elapsed = time.time() - t0
-    print(f"\nDone: {total} frames in {elapsed:.1f}s ({elapsed/total:.3f}s/frame)")
 
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)

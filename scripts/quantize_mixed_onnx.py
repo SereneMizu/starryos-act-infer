@@ -189,24 +189,49 @@ def classify_nodes(model: onnx.ModelProto):
     return classes
 
 
-# 每个 preset 决定哪些类别的层走 INT8
-# 向后兼容: ffn = ffn1 + ffn2
+# 每个 preset 决定哪些类别的层走 INT8.
+# 值的含义: "no"=不量化, "all"=全量化, "encoder"=仅 encoder 部分, "decoder"=仅 decoder 部分.
+#   (向后兼容: True -> "all", False -> "no", 在 _normalize_preset 里转换)
+# ffn = ffn1 + ffn2
 PRESETS = {
-    "conv-only":       {"conv": True,  "ffn1": False, "ffn2": False, "qkv": False, "attn_out_proj": False},
-    "ffn1-only":       {"conv": False, "ffn1": True,  "ffn2": False, "qkv": False, "attn_out_proj": False},
-    "ffn2-only":       {"conv": False, "ffn1": False, "ffn2": True,  "qkv": False, "attn_out_proj": False},
-    "qkv-only":        {"conv": False, "ffn1": False, "ffn2": False, "qkv": True,  "attn_out_proj": False},
-    "attn-out-only":   {"conv": False, "ffn1": False, "ffn2": False, "qkv": False, "attn_out_proj": True},
-    "ffn-only":        {"conv": False, "ffn1": True,  "ffn2": True,  "qkv": False, "attn_out_proj": False},
-    "conv+qkv":        {"conv": True,  "ffn1": False, "ffn2": False, "qkv": True,  "attn_out_proj": False},
-    "conv+attn":       {"conv": True,  "ffn1": False, "ffn2": False, "qkv": False, "attn_out_proj": True},
-    "conv+qkv+attn":   {"conv": True,  "ffn1": False, "ffn2": False, "qkv": True,  "attn_out_proj": True},
-    "conservative":    {"conv": True,  "ffn1": True,  "ffn2": True,  "qkv": False, "attn_out_proj": False},
-    "conv+ffn2":       {"conv": True,  "ffn1": False, "ffn2": True,  "qkv": False, "attn_out_proj": False},
-    "conv+ffn1":       {"conv": True,  "ffn1": True,  "ffn2": False, "qkv": False, "attn_out_proj": False},
-    "mixed":           {"conv": True,  "ffn1": True,  "ffn2": True,  "qkv": True,  "attn_out_proj": False},
-    "aggressive":      {"conv": True,  "ffn1": True,  "ffn2": True,  "qkv": True,  "attn_out_proj": True},
+    "conv-only":       {"conv": "all",  "ffn1": "no", "ffn2": "no", "qkv": "no", "attn_out_proj": "no"},
+    "ffn1-only":       {"conv": "no",  "ffn1": "all", "ffn2": "no", "qkv": "no", "attn_out_proj": "no"},
+    "ffn2-only":       {"conv": "no",  "ffn1": "no", "ffn2": "all", "qkv": "no", "attn_out_proj": "no"},
+    "qkv-only":        {"conv": "no",  "ffn1": "no", "ffn2": "no", "qkv": "all", "attn_out_proj": "no"},
+    "attn-out-only":   {"conv": "no",  "ffn1": "no", "ffn2": "no", "qkv": "no", "attn_out_proj": "all"},
+    "ffn-only":        {"conv": "no",  "ffn1": "all", "ffn2": "all", "qkv": "no", "attn_out_proj": "no"},
+    "conv+qkv":        {"conv": "all",  "ffn1": "no", "ffn2": "no", "qkv": "all", "attn_out_proj": "no"},
+    "conv+attn":       {"conv": "all",  "ffn1": "no", "ffn2": "no", "qkv": "no", "attn_out_proj": "all"},
+    "conv+qkv+attn":   {"conv": "all",  "ffn1": "no", "ffn2": "no", "qkv": "all", "attn_out_proj": "all"},
+    "conservative":    {"conv": "all",  "ffn1": "all", "ffn2": "all", "qkv": "no", "attn_out_proj": "no"},
+    "conv+ffn2":       {"conv": "all",  "ffn1": "no", "ffn2": "all", "qkv": "no", "attn_out_proj": "no"},
+    "conv+ffn1":       {"conv": "all",  "ffn1": "all", "ffn2": "no", "qkv": "no", "attn_out_proj": "no"},
+    "mixed":           {"conv": "all",  "ffn1": "all", "ffn2": "all", "qkv": "all", "attn_out_proj": "no"},
+    "aggressive":      {"conv": "all",  "ffn1": "all", "ffn2": "all", "qkv": "all", "attn_out_proj": "all"},
+    # encoder 全 INT8 (conv+qkv+ffn+attn_out), decoder 仅 qkv INT8.
+    # (conv 只存在于 vision_encoder/ResNet18, 无 decoder conv.)
+    # decoder ffn 敏感 (ffn2 drop 15.47%), decoder attn_out 有 4 个坏分子 (layers.2/3).
+    # CPU 12.9ms/帧 (FP32 21.6ms, 快 40%), 66MB, turn match 98.8%. 详见 docs/quantization_v2.md.
+    "enc_full":        {"conv": "all",  "ffn1": "encoder", "ffn2": "encoder", "qkv": "all", "attn_out_proj": "encoder"},
 }
+
+
+def _is_encoder_node(name: str) -> bool:
+    """encoder = vision_encoder + encoder transformer layers. decoder = decoder layers."""
+    return "/decoder/" not in name
+
+
+def _filter_by_scope(names, scope: str) -> list[str]:
+    """按 scope 过滤节点名列表. scope: 'all'/'encoder'/'decoder'/'no'."""
+    if scope == "no":
+        return []
+    if scope == "all":
+        return sorted(names)
+    if scope == "encoder":
+        return sorted(n for n in names if _is_encoder_node(n))
+    if scope == "decoder":
+        return sorted(n for n in names if not _is_encoder_node(n))
+    return []
 
 
 def stage1_int8_quantize(
@@ -244,11 +269,10 @@ def stage1_int8_quantize(
 
     nodes_to_quantize: list[str] = []
     for cat in ("conv", "ffn1", "ffn2", "qkv", "attn_out_proj"):
-        if cfg[cat]:
-            nodes_to_quantize += sorted(cls[cat])
+        nodes_to_quantize += _filter_by_scope(cls[cat], cfg[cat])
 
     def _cnt(cat):
-        return len(cls[cat]) if cfg[cat] else 0
+        return len(_filter_by_scope(cls[cat], cfg[cat]))
 
     print(f"[stage1:{preset}] method={calibrate_method} INT8 nodes={len(nodes_to_quantize)}  "
           f"(conv={_cnt('conv')}, ffn1={_cnt('ffn1')}, ffn2={_cnt('ffn2')}, "
@@ -363,11 +387,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=MODEL_FP32)
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--preset", choices=list(PRESETS.keys()), default="mixed")
+    parser.add_argument("--preset", choices=list(PRESETS.keys()), default="enc_full",
+                        help="量化策略 (默认 enc_full: encoder 全 INT8 + decoder 仅 qkv)")
     parser.add_argument("--calib", choices=["MinMax", "Entropy", "Percentile"], default="MinMax",
-                        help="calibration 方法 (Entropy 通常对 attention 模型更准)")
-    parser.add_argument("--calib-mode", choices=["first", "uniform", "all"], default="uniform",
-                        help="校准图像采样方式: first(排序前N), uniform(均匀N), all(全部)")
+                        help="calibration 方法 (Entropy 内存占用高, 60+ 节点 + 全量校准易 OOM)")
+    parser.add_argument("--calib-mode", choices=["first", "uniform", "all"], default="all",
+                        help="校准图像采样方式: all(全量666, 默认最优), uniform(均匀N), first(排序前N)")
     parser.add_argument("--calib-count", type=int, default=100,
                         help="校准帧数量 (仅对 uniform/first 有效, 默认100)")
     parser.add_argument("--calib-threshold", type=float, default=0.0,
