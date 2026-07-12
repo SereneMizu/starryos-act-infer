@@ -188,7 +188,7 @@ INT8 的 scale/zero_point, 直接影响精度. (first-N 无意义: 按文件名�
 ### 生成
 
 ```bash
-make quant-all   # quant-mixed + quant-verify
+make quant-all   # model-onnx-mixed + quant-verify
 # 或手动:
 .venv/bin/python scripts/quantize_mixed_onnx.py --preset enc_full --calib-mode all
 # 输出: output/train/model_mixed_enc_full.onnx (65.7 MB)

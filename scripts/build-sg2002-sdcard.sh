@@ -9,7 +9,7 @@ ROOTFS_IMG="$proj/tgoskits/tmp/axbuild/rootfs/rootfs-riscv64-alpine.img/rootfs-r
 BOOT_IMG="$proj/sdboot/sg2002-boot.img"
 
 TPU_BIN="$proj/act-infer-tpu/target/riscv64gc-unknown-linux-musl/release/act-infer-tpu"
-TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_bf16.cvimodel"
+TPU_CVMODEL="$proj/output/tpu/act_model_cv181x_mixed.cvimodel"
 STATS_JSON="$proj/output/dataset/meta/stats.json"
 FRAMES_DIR="$proj/output/dataset/videos/observation.images.fpv/chunk-000"
 REF_JSON="$proj/output/infer_results_onnx.json"

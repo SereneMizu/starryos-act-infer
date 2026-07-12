@@ -40,7 +40,7 @@ def main():
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     output_path = Path(args.output) if args.output else (
-        WORK_DIR / f"act_model_{args.target.lower()}.rknn"
+        WORK_DIR / f"act_model_{args.target.lower()}_fp16.rknn"
     )
 
     try:
@@ -66,7 +66,7 @@ def main():
 
     rknn = RKNN(verbose=True)
 
-    ret = rknn.config(target_platform=args.target)
+    ret = rknn.config(target_platform=args.target, optimization_level=2)
     if ret != 0:
         raise SystemExit(f"rknn.config failed: {ret}")
 

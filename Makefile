@@ -1,11 +1,12 @@
 .PHONY: all clean \
-        export-onnx verify-onnx \
+        model-onnx verify-onnx \
         quant-sensitivity quant-per-layer quant-calib-compare \
-        quant-mixed quant-verify quant-all \
+        model-onnx-mixed quant-verify quant-all \
         docker-up docker-down docker-shell \
         tpu-up tpu-down tpu-shell \
-        test-host test-qemu build-sg2002 sg2002-sdcard \
-        build-rk3588 rk3588-sdcard build-rknn quant-rknn-hybrid \
+        test-host test-qemu \
+        model-sg2002-bf16 model-sg2002-mixed build-sg2002 sg2002-sdcard \
+        build-rk3588 model-rk3588-fp16 model-rk3588-mixed rk3588-sdcard \
         build-lrzsz
 
 PYTHON := .venv/bin/python
@@ -52,17 +53,19 @@ SG2002_UIMG  := output/sg2002/starryos.uimg
 SG2002_BOARD := os/StarryOS/configs/board/licheerv-nano-sg2002.toml
 RK3588_UIMG  := output/rk3588/starryos.uimg
 RK3588_BOARD := os/StarryOS/configs/board/orangepi-5-plus.toml
-RKNN_RKNN    := output/rknn/act_model_rk3588.rknn
-RKNN_HYBRID  := output/rknn/act_model_rk3588_hybrid.rknn
+RKNN_FP16    := output/rknn/act_model_rk3588_fp16.rknn
+RKNN_MIXED   := output/rknn/act_model_rk3588_mixed.rknn
+TPU_CVIMODEL_BF16   := output/tpu/act_model_cv181x_bf16.cvimodel
+TPU_CVIMODEL_MIXED  := output/tpu/act_model_cv181x_mixed.cvimodel
 STARRY_LINK  := tgoskits/apps/starry/act-infer
 
 # CUDA EP 环境已移除: 改用纯 CPU onnxruntime (AVX-VNNI 加速 INT8).
 
-all: export-onnx verify-onnx
+all: model-onnx verify-onnx
 
 # === Python pipeline (host) ===
 
-export-onnx: $(MODEL_ONNX)
+model-onnx: $(MODEL_ONNX)
 
 $(MODEL_ONNX): scripts/export_onnx.py $(MODEL_PT)
 	$(PYTHON) scripts/export_onnx.py
@@ -100,7 +103,7 @@ quant-calib-compare:
 $(MODEL_MIXED): scripts/quantize_mixed_onnx.py $(MODEL_ONNX)
 	$(PYTHON) scripts/quantize_mixed_onnx.py --preset enc_full --calib-mode all
 
-quant-mixed: $(MODEL_MIXED)
+model-onnx-mixed: $(MODEL_MIXED)
 
 # batch_infer 666 帧 -> infer_results (5 轮测速取中位数)
 $(RESULT_MIXED): scripts/batch_infer_onnx.py $(MODEL_MIXED)
@@ -111,7 +114,7 @@ quant-verify: $(RESULT_MIXED) $(RESULT_ONNX)
 	$(PYTHON) scripts/verify_results.py --reference $(RESULT_ONNX) --result $(RESULT_MIXED)
 
 # 一键: 生成模型 -> 推理 -> 验证
-quant-all: quant-mixed quant-verify
+quant-all: model-onnx-mixed quant-verify
 
 # === Containers ===
 
@@ -170,21 +173,24 @@ build-rk3588: $(RK3588_UIMG)
 $(MODEL_FP16): $(MODEL_ONNX)
 	$(PYTHON) scripts/convert_onnx_fp16.py
 
-# RKNN 模型编译（主机 .venv-rknn，rknn-toolkit2）+ Rust 交叉编译（容器，aarch64 glibc）
-$(RKNN_RKNN): $(MODEL_FP16)
+# RKNN FP16 模型（主机 .venv-rknn，rknn-toolkit2）
+$(RKNN_FP16): $(MODEL_FP16)
 	$(RKNN_PYTHON) scripts/rknn_compile.py --target rk3588
 
-build-rknn: $(RKNN_RKNN) docker-up
+model-rk3588-fp16: $(RKNN_FP16)
+
+# RKNN 混合精度 (enc_full: QDQ INT8 + FP16): 已量化 ONNX 直转, 不重新量化
+$(RKNN_MIXED): scripts/rknn_compile.py $(MODEL_MIXED)
+	$(RKNN_PYTHON) scripts/rknn_compile.py --onnx $(MODEL_MIXED) --output $(RKNN_MIXED) --target rk3588
+
+model-rk3588-mixed: $(RKNN_MIXED)
+
+# RKNN Rust 交叉编译（容器，aarch64 glibc）
+build-rk3588-binary: docker-up
 	$(DOCKER_EXEC) bash -c 'rustup default stable 2>/dev/null; rustup target add $(RKNN_TARGET) 2>/dev/null; cd /workspace/act-infer-rknn && $(RKNN_LINKER_ENV) cargo build --release --target $(RKNN_TARGET)'
 	$(DOCKER_EXEC) aarch64-linux-gnu-strip /workspace/act-infer-rknn/target/$(RKNN_TARGET)/release/act-infer-rknn
 
-# RKNN 混合精度 (conv+qkv QDQ INT8 + 其余 FP16): 已量化 ONNX 直转, 不重新量化
-$(RKNN_HYBRID): scripts/rknn_hybrid_quantize.py $(MODEL_MIXED)
-	$(RKNN_PYTHON) scripts/rknn_hybrid_quantize.py
-
-quant-rknn-hybrid: $(RKNN_HYBRID)
-
-rk3588-sdcard: build-rk3588 build-rknn $(ROOTFS_RK3588)
+rk3588-sdcard: build-rk3588 model-rk3588-mixed build-rk3588-binary $(ROOTFS_RK3588)
 	sudo bash scripts/build-rk3588-sdcard.sh
 
 # === Task 1: SG2002 (TPU) ===
@@ -195,10 +201,24 @@ $(SG2002_UIMG): docker-up
 	uimg_src=$$(find tgoskits/target/riscv64gc-unknown-linux-musl -name "*.uimg" 2>/dev/null | head -1); \
 		[ -n "$$uimg_src" ] && cp "$$uimg_src" $@
 
-build-sg2002: $(SG2002_UIMG) tpu-up $(MODEL_ONNX)
-	$(TPU_DOCKER_EXEC) python scripts/tpu_compile.py --quantize BF16 --processor cv181x
+# TPU BF16 cvimodel (全模型 BF16, 无 INT8)
+$(TPU_CVIMODEL_BF16): tpu-up $(MODEL_ONNX)
+	$(TPU_DOCKER_EXEC) python scripts/tpu_compile_bf16.py --quantize BF16 --processor cv181x
+
+model-sg2002-bf16: $(TPU_CVIMODEL_BF16)
+
+# TPU 混合精度 cvimodel: INT8 + BF16 (enc_full 策略: encoder 全 INT8, decoder ffn+attn_out BF16)
+$(TPU_CVIMODEL_MIXED): tpu-up $(MODEL_ONNX)
+	$(TPU_DOCKER_EXEC) python scripts/tpu_compile_mixed.py --processor cv181x --cali-num 100 --skip-verify
+
+model-sg2002-mixed: $(TPU_CVIMODEL_MIXED)
+
+# SG2002 Rust 交叉编译（容器，riscv64 musl）
+build-sg2002-binary: $(SG2002_UIMG) docker-up
 	$(DOCKER_EXEC) bash -c 'rustup default stable 2>/dev/null; rustup target add $(TARGET) 2>/dev/null; cd /workspace/act-infer-tpu && $(LINKER_ENV) cargo build --release --target $(TARGET)'
 	$(DOCKER_EXEC) riscv64-linux-musl-strip /workspace/act-infer-tpu/target/$(TARGET)/release/act-infer-tpu
+
+build-sg2002: $(SG2002_UIMG) model-sg2002-mixed build-sg2002-binary
 
 SG2002_BOOT := sdboot/sg2002-boot.img
 RK3588_BOOT := sdboot/rk3588-boot.img

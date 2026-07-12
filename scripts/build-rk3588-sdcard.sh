@@ -12,7 +12,7 @@ BOOTCHAIN="$proj/sdboot/rk3588-boot.img"
 DTB_SRC="$proj/tgoskits/os/StarryOS/configs/board/orangepi-5-plus.dtb"
 
 RKNN_BIN="$proj/act-infer-rknn/target/aarch64-unknown-linux-gnu/release/act-infer-rknn"
-RKNN_MODEL="$proj/output/rknn/act_model_rk3588.rknn"
+RKNN_MODEL="$proj/output/rknn/act_model_rk3588_mixed.rknn"
 RKNN_LIB="$proj/starry-apps/act-infer-rknn/lib/librknnrt.so"
 STATS_JSON="$proj/output/dataset/meta/stats.json"
 FRAMES_DIR="$proj/output/dataset/videos/observation.images.fpv/chunk-000"
@@ -23,7 +23,7 @@ APP_DEST="/opt/act-infer"
 [[ -f "$ROOTFS_IMG" ]] || { echo "[rk3588] rootfs not found: $ROOTFS_IMG"; exit 1; }
 [[ -f "$BOOTCHAIN" ]] || { echo "[rk3588] boot not found: $BOOTCHAIN"; exit 1; }
 [[ -f "$DTB_SRC" ]] || { echo "[rk3588] dtb not found: $DTB_SRC"; exit 1; }
-[[ -f "$RKNN_BIN" ]] || { echo "[rk3588] app not found: $RKNN_BIN (run 'make build-rknn')"; exit 1; }
+[[ -f "$RKNN_BIN" ]] || { echo "[rk3588] app not found: $RKNN_BIN (run 'make build-rk3588-binary')"; exit 1; }
 [[ -f "$RKNN_MODEL" ]] || { echo "[rk3588] model not found: $RKNN_MODEL"; exit 1; }
 [[ -f "$RKNN_LIB" ]] || { echo "[rk3588] librknnrt.so not found: $RKNN_LIB"; exit 1; }
 mkdir -p "$out"

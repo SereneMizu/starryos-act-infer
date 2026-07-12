@@ -1,13 +1,14 @@
 """
-TPU-MLIR 编译脚本：ONNX → MLIR → F16 cvimodel (SG2002/CV186X)
+TPU-MLIR 单精度编译脚本：ONNX → MLIR → BF16/F16/INT8/F32 cvimodel (SG2002/CV181X)
 
 前置条件：
     pip install tpu_mlir   (在 sophgo/tpuc_dev Docker 内)
 
 用法:
-    python scripts/tpu_compile.py                # 默认 F16
-    python scripts/tpu_compile.py --quantize BF16
-    python scripts/tpu_compile.py --quantize INT8
+    python scripts/tpu_compile_bf16.py                         # 默认 BF16
+    python scripts/tpu_compile_bf16.py --quantize F16
+    python scripts/tpu_compile_bf16.py --quantize INT8
+    python scripts/tpu_compile_bf16.py --onnx <path>           # 指定输入 ONNX
 """
 
 import argparse
@@ -28,7 +29,6 @@ STATS_PATH = PROJECT_ROOT / "output" / "dataset" / "meta" / "stats.json"
 IMG_DIR = PROJECT_ROOT / "output" / "dataset" / "videos" / "observation.images.fpv" / "chunk-000"
 WORK_DIR = PROJECT_ROOT / "output" / "tpu"
 MLIR_PATH = WORK_DIR / "act_model.mlir"
-OUTPUT_NAME = "act_model_cv186x_f16.cvimodel"
 
 IMAGE_TRANSFORM = transforms.Compose([
     transforms.Resize((224, 224)),
